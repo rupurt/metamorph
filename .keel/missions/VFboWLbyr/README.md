@@ -1,14 +1,16 @@
 ---
 # system-managed
 id: VFboWLbyr
-status: achieved
+status: verified
 created_at: 2026-04-01T22:34:20
-updated_at: 2026-04-01T23:25:38
+updated_at: 2026-04-02T11:53:31
 # authored
 title: Ship The First End-To-End Candle Conversion Path
 watch: ~
 activated_at: 2026-04-01T22:41:25
 achieved_at: 2026-04-01T23:25:38
+verified_at: 2026-04-02T11:53:31
+verification_artifact: .keel/missions/VFboWLbyr/verification.gif
 ---
 
 # Ship The First End-To-End Candle Conversion Path
