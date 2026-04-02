@@ -189,6 +189,12 @@ pub struct ConversionPlan {
     pub steps: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationReport {
+    pub path: PathBuf,
+    pub format: Format,
+}
+
 pub fn inspect(source: &Source) -> Result<InspectReport> {
     let mut notes = Vec::new();
     let detected_format = match source {
@@ -284,6 +290,39 @@ pub fn convert(request: &ConvertRequest) -> Result<()> {
     }
 }
 
+pub fn validate(path: &Path, expected: Option<Format>) -> Result<ValidationReport> {
+    let source = Source::LocalPath(path.to_path_buf());
+    let inspect_report = inspect(&source)?;
+
+    if let Some(expected) = expected {
+        validate_for_format(path, expected)?;
+
+        if let Some(detected) = inspect_report.detected_format
+            && detected != expected
+        {
+            return Err(MetamorphError::InvalidOutputBundle {
+                path: path.to_path_buf(),
+                reason: format!("expected `{expected}`, but detected `{detected}`"),
+            });
+        }
+
+        return Ok(ValidationReport {
+            path: path.to_path_buf(),
+            format: expected,
+        });
+    }
+
+    let detected = inspect_report
+        .detected_format
+        .ok_or_else(|| MetamorphError::UnknownFormatForSource(path.display().to_string()))?;
+    validate_for_format(path, detected)?;
+
+    Ok(ValidationReport {
+        path: path.to_path_buf(),
+        format: detected,
+    })
+}
+
 fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<()> {
     let source_path = resolve_local_gguf_path(&request.source)?;
     let output_dir = resolve_local_target_dir(&request.target)?;
@@ -304,8 +343,7 @@ fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<()> 
     )?;
     write_tokenizer_file(&content, &output_dir.join("tokenizer.json"))?;
     candle_core::safetensors::save(&tensors, output_dir.join("model.safetensors"))?;
-
-    validate_hf_safetensors_bundle(&output_dir)?;
+    validate(&output_dir, Some(Format::HfSafetensors))?;
 
     Ok(())
 }
@@ -531,6 +569,16 @@ fn write_json_file(path: &Path, value: &JsonValue) -> Result<()> {
     Ok(())
 }
 
+fn validate_for_format(path: &Path, format: Format) -> Result<()> {
+    match format {
+        Format::HfSafetensors => validate_hf_safetensors_bundle(path),
+        Format::Safetensors => validate_safetensors_artifacts(path),
+        _ => Err(MetamorphError::NotImplemented(
+            "validation is not wired yet for this format",
+        )),
+    }
+}
+
 fn validate_hf_safetensors_bundle(path: &Path) -> Result<()> {
     for required in [
         "config.json",
@@ -553,6 +601,43 @@ fn validate_hf_safetensors_bundle(path: &Path) -> Result<()> {
             path: path.to_path_buf(),
             reason: "output does not inspect as `hf-safetensors`".to_owned(),
         });
+    }
+
+    Ok(())
+}
+
+fn validate_safetensors_artifacts(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Err(MetamorphError::MissingPath(path.to_path_buf()));
+    }
+
+    if path.is_file() {
+        if detect_path_format(path) != Some(Format::Safetensors) {
+            return Err(MetamorphError::InvalidOutputBundle {
+                path: path.to_path_buf(),
+                reason: "expected a `.safetensors` file".to_owned(),
+            });
+        }
+
+        candle_core::safetensors::load(path, &Device::Cpu)?;
+        return Ok(());
+    }
+
+    let safetensors_files = fs::read_dir(path)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|entry| detect_path_format(entry) == Some(Format::Safetensors))
+        .collect::<Vec<_>>();
+
+    if safetensors_files.is_empty() {
+        return Err(MetamorphError::InvalidOutputBundle {
+            path: path.to_path_buf(),
+            reason: "missing required safetensors artifacts".to_owned(),
+        });
+    }
+
+    for safetensors_file in safetensors_files {
+        candle_core::safetensors::load(safetensors_file, &Device::Cpu)?;
     }
 
     Ok(())
@@ -753,11 +838,12 @@ fn detect_path_format(path: &Path) -> Option<Format> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvertRequest, Format, Source, Target, convert, inspect, plan};
+    use super::{ConvertRequest, Format, Source, Target, convert, inspect, plan, validate};
     use candle_core::quantized::gguf_file;
     use candle_core::quantized::{GgmlDType, QTensor};
     use candle_core::{Device, Tensor};
     use serde_json::Value as JsonValue;
+    use std::collections::HashMap;
     use std::fs::{self, File};
     use std::io::{BufWriter, Write};
     use std::str::FromStr;
@@ -938,6 +1024,32 @@ mod tests {
         assert!(tensors.contains_key("tok_embeddings.weight"));
     }
 
+    #[test]
+    fn validation_rejects_missing_required_hf_bundle_files() {
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join("config.json"), b"{}").unwrap();
+        fs::write(temp.path().join("tokenizer.json"), b"{}").unwrap();
+        write_valid_safetensors(temp.path().join("model.safetensors").as_path());
+
+        let error = validate(temp.path(), Some(Format::HfSafetensors)).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing required file `generation_config.json`")
+        );
+    }
+
+    #[test]
+    fn validation_accepts_complete_hf_bundle() {
+        let temp = tempdir().unwrap();
+        write_valid_hf_bundle(temp.path());
+
+        let report = validate(temp.path(), Some(Format::HfSafetensors)).unwrap();
+
+        assert_eq!(report.format, Format::HfSafetensors);
+    }
+
     fn write_fixture_gguf(path: &std::path::Path) {
         let device = Device::Cpu;
         let tensor = Tensor::from_vec(vec![0f32, 1.0, 2.0, 3.0], (2, 2), &device).unwrap();
@@ -1006,5 +1118,20 @@ mod tests {
         let mut writer = BufWriter::new(File::create(path).unwrap());
         gguf_file::write(&mut writer, &metadata_refs, &tensor_refs).unwrap();
         writer.flush().unwrap();
+    }
+
+    fn write_valid_hf_bundle(path: &std::path::Path) {
+        fs::write(path.join("config.json"), b"{}").unwrap();
+        fs::write(path.join("tokenizer.json"), b"{}").unwrap();
+        fs::write(path.join("generation_config.json"), b"{}").unwrap();
+        write_valid_safetensors(path.join("model.safetensors").as_path());
+    }
+
+    fn write_valid_safetensors(path: &std::path::Path) {
+        let device = Device::Cpu;
+        let tensor = Tensor::from_vec(vec![0f32, 1.0, 2.0, 3.0], (2, 2), &device).unwrap();
+        let tensors = HashMap::from([("weight".to_owned(), tensor)]);
+
+        candle_core::safetensors::save(&tensors, path).unwrap();
     }
 }

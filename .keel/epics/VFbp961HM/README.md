@@ -22,8 +22,8 @@ mission: VFboWLbyr
 ## Voyages
 
 <!-- BEGIN GENERATED -->
-**Progress:** 0/1 voyages complete, 2/3 stories done
+**Progress:** 1/1 voyages complete, 3/3 stories done
 | Voyage | Status | Stories |
 |--------|--------|---------|
-| [Inspect Convert And Validate Candle Bundle](voyages/VFbpfEuEU/) | in-progress | 2/3 |
+| [Inspect Convert And Validate Candle Bundle](voyages/VFbpfEuEU/) | done | 3/3 |
 <!-- END GENERATED -->

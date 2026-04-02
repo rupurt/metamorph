@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use metamorph::{ConvertRequest, Format, Source, Target, convert, inspect, plan};
+use metamorph::{ConvertRequest, Format, Source, Target, convert, inspect, plan, validate};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -138,33 +138,8 @@ fn convert_command(
 }
 
 fn validate_command(path: &Path, expected: Option<Format>) -> Result<()> {
-    let source = Source::LocalPath(path.to_path_buf());
-    let report = inspect(&source)?;
-
-    let detected = report.detected_format;
-    if let Some(expected) = expected {
-        match detected {
-            Some(detected) if detected == expected => {
-                println!("Validated {} as {expected}", path.display());
-            }
-            Some(detected) => {
-                bail!(
-                    "expected {} to be {}, but detected {}",
-                    path.display(),
-                    expected,
-                    detected
-                );
-            }
-            None => {
-                bail!("could not determine the format for {}", path.display());
-            }
-        }
-    } else {
-        match detected {
-            Some(format) => println!("Detected {} as {format}", path.display()),
-            None => bail!("could not determine the format for {}", path.display()),
-        }
-    }
+    let report = validate(path, expected)?;
+    println!("Validated {} as {}", path.display(), report.format);
 
     Ok(())
 }

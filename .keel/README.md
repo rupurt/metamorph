@@ -5,9 +5,9 @@
 
 ## Epics
 
-### [First Candle Conversion Path](epics/VFbp961HM/) (active)
+### [First Candle Conversion Path](epics/VFbp961HM/) (done)
 
 | Voyage | Status |
 |--------|--------|
-| [Inspect Convert And Validate Candle Bundle](epics/VFbp961HM/voyages/VFbpfEuEU/) | in-progress |
+| [Inspect Convert And Validate Candle Bundle](epics/VFbp961HM/voyages/VFbpfEuEU/) | done |
 
