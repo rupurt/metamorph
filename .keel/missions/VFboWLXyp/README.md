@@ -1,12 +1,13 @@
 ---
 # system-managed
 id: VFboWLXyp
-status: defining
+status: active
 created_at: 2026-04-01T22:34:20
-updated_at: 2026-04-01T22:34:20
+updated_at: 2026-04-02T09:14:14
 # authored
 title: Operationalize Validation Cache And Publishing Flows
 watch: ~
+activated_at: 2026-04-02T09:14:14
 ---
 
 # Operationalize Validation Cache And Publishing Flows

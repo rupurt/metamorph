@@ -11,3 +11,10 @@
 |--------|--------|
 | [Inspect Convert And Validate Candle Bundle](epics/VFbp961HM/voyages/VFbpfEuEU/) | done |
 
+### [Artifact Operations Pipeline](epics/VFeOQzrXV/) (active)
+
+| Voyage | Status |
+|--------|--------|
+| [Make Publish And Recovery Flows Explicit](epics/VFeOQzrXV/voyages/VFeOTDZi1/) | planned |
+| [Stabilize Cache And Validation Reuse Loop](epics/VFeOQzrXV/voyages/VFeOTEZi2/) | planned |
+
