@@ -26,3 +26,9 @@
 | [Add Backend Registry And Second Path](epics/VFepvp0Xe/voyages/VFepxZZwT/) | done |
 | [Surface Compatibility Reports And Extension Guidance](epics/VFepvp0Xe/voyages/VFepyCJ2Q/) | done |
 
+### [Remote Hugging Face Acquisition And Cache Materialization](epics/VFg6yYH7e/) (draft)
+
+### [Guarded Hugging Face Publish Execution](epics/VFg6zB3Ej/) (draft)
+
+### [Promote Compatible Paths Into Executable Flows](epics/VFg70aqT7/) (draft)
+
