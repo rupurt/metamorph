@@ -1,0 +1,7 @@
+---
+recorded_at: 2026-04-02T11:18:36.673613688-07:00
+command: cargo clippy --workspace --all-targets --all-features -- -D warnings
+---
+
+--- stderr ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s

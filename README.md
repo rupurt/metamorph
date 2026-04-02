@@ -52,11 +52,11 @@ Some transformations are format changes. Others are material changes in represen
 
 ### Library
 
-The library should expose a structured conversion pipeline:
+The library exposes a structured conversion pipeline:
 
 - fetch or read source artifacts
 - inspect and identify the source format
-- construct a conversion plan
+- assess compatibility and construct a conversion plan
 - transform weights, config, tokenizer, and metadata
 - validate the output layout
 - write to disk, cache, or another destination
@@ -64,16 +64,25 @@ The library should expose a structured conversion pipeline:
 At a high level, the library looks like this today:
 
 ```rust
-use metamorph::{ConvertRequest, Format, Source, Target};
+use metamorph::{
+    compatibility, CompatibilityStatus, ConvertRequest, Format, Source, Target,
+};
 
-let result = metamorph::convert(ConvertRequest {
+let request = ConvertRequest {
     source: "hf://prism-ml/Bonsai-8B-gguf@main".parse::<Source>()?,
     target: Target::LocalDir("./cache/bonsai-candle".into()),
     from: Some(Format::Gguf),
     to: Format::HfSafetensors,
     allow_lossy: true,
-})?;
+};
+
+let report = compatibility(&request)?;
+if report.status == CompatibilityStatus::Executable {
+    metamorph::convert(&request)?;
+}
 ```
+
+`crates/metamorph/src/lib.rs` is now a facade over explicit `source`, `format`, `plan`, `transform`, `validate`, `cache`, and `publish` modules.
 
 ### CLI
 
@@ -103,6 +112,13 @@ metamorph convert \
   --output ./artifacts/bonsai-candle \
   --allow-lossy
 
+metamorph convert \
+  --from gguf \
+  --to safetensors \
+  --input ./fixtures/bonsai.gguf \
+  --output ./artifacts/bonsai.safetensors \
+  --allow-lossy
+
 metamorph validate ./artifacts/bonsai-candle --format hf-safetensors
 
 metamorph upload \
@@ -116,6 +132,8 @@ metamorph upload \
 ```
 
 `upload` is preview-first: without `--execute` it validates the bundle and renders the publish plan without mutating anything. With `--execute`, the CLI currently requires `HF_TOKEN` and then stops with an explicit not-yet-implemented message rather than attempting a hidden or partial remote write.
+
+`convert` is compatibility-first: before it plans or executes, it renders the assessed source format, compatibility status, lossy flag, registered backend when one exists, and any blockers such as missing lossy opt-in or an unwired execution backend.
 
 ## Core concepts
 
@@ -155,6 +173,16 @@ A concrete, inspectable description of what will happen:
 - tensor rename or reshape
 - dequantization or requantization
 - tokenizer/config normalization
+
+### Compatibility report
+
+A structured description of whether a requested path is executable, planned-only, unsupported, or missing source-format information:
+
+- resolved source format
+- requested target format
+- lossy status
+- registered backend, when one exists
+- blockers and recovery guidance
 
 ## Guiding principles
 
@@ -207,17 +235,33 @@ The model exists in format Y.
 Fetch it, convert it, cache it, validate it, and hand me a path I can load.
 ```
 
-## Planned library surface
+## Current library surface
 
-The library should likely grow around a few stable building blocks:
+The library is organized around these building blocks:
 
 - `source`: local and remote artifact acquisition
 - `format`: format detection and descriptors
 - `plan`: conversion planning and compatibility checks
-- `transform`: tensor and metadata transforms
+- `transform`: capability registry plus tensor and metadata transforms
 - `validate`: output verification
 - `cache`: reproducible local artifact storage
 - `publish`: upload or mirror operations
+
+## Current backend matrix
+
+Executable today:
+
+- `gguf -> hf-safetensors`
+- `gguf -> safetensors`
+
+Planned-only compatibility today:
+
+- same-format relayout
+- `safetensors -> hf-safetensors`
+
+Unsupported today:
+
+- paths without a registered capability such as `safetensors -> mlx`
 
 ## Error model
 
@@ -238,7 +282,7 @@ Success is not "supports every model format."
 Success is:
 
 - another Rust project can depend on `metamorph` as a library
-- the CLI can inspect, cache-plan, convert, validate, and preview publish behavior without hiding lossy or network-sensitive steps
+- the CLI can inspect, assess compatibility, cache-plan, convert, validate, and preview publish behavior without hiding lossy or network-sensitive steps
 - downstream runtimes stop carrying bespoke conversion code
 - adding a new conversion path feels incremental instead of invasive
 

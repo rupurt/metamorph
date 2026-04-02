@@ -1,15 +1,17 @@
 ---
 # system-managed
 id: VFeq4jwRJ
-status: backlog
+status: done
 created_at: 2026-04-02T10:59:20
-updated_at: 2026-04-02T11:03:27
+updated_at: 2026-04-02T11:17:49
 # authored
 title: Define Module Facade And Domain Reexports
 type: feat
 operator-signal:
 scope: VFepvp0Xe/VFepwxnmQ
 index: 1
+started_at: 2026-04-02T11:07:56
+completed_at: 2026-04-02T11:17:49
 ---
 
 # Define Module Facade And Domain Reexports
@@ -20,5 +22,5 @@ Create the first stable module tree and top-level facade so the library can stop
 
 ## Acceptance Criteria
 
-- [ ] [SRS-01/AC-01] `crates/metamorph/src` defines dedicated modules for `source`, `format`, `plan`, `transform`, `validate`, `cache`, and `publish`, with `lib.rs` reduced to a facade or equivalent entry point. <!-- verify: cargo test --workspace, SRS-01:start:end, proof: ac-1.log-->
-- [ ] [SRS-NFR-01/AC-01] Existing public workflow entry points remain available, or any migration is explicit and proven by compiling the current tests and examples. <!-- verify: cargo test --workspace, SRS-NFR-01:start, proof: ac-2.log-->
+- [x] [SRS-01/AC-01] `crates/metamorph/src` defines dedicated modules for `source`, `format`, `plan`, `transform`, `validate`, `cache`, and `publish`, with `lib.rs` reduced to a facade or equivalent entry point. <!-- verify: cargo test --workspace, SRS-01:start:end, proof: ac-1.log-->
+- [x] [SRS-NFR-01/AC-01] Existing public workflow entry points remain available, or any migration is explicit and proven by compiling the current tests and examples. <!-- verify: cargo test --workspace, SRS-NFR-01:start, proof: ac-2.log-->

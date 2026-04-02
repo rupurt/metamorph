@@ -4,8 +4,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use metamorph::{
-    ConvertRequest, Format, PublishRequest, Source, Target, acquire_source, cache_dir, convert,
-    inspect, plan, plan_publish, publish, validate,
+    CompatibilityReport, ConvertRequest, Format, PublishRequest, Source, Target, acquire_source,
+    cache_dir, compatibility, convert, inspect, plan, plan_publish, publish, validate,
 };
 
 #[derive(Debug, Parser)]
@@ -130,6 +130,8 @@ fn convert_command(
         to,
         allow_lossy,
     };
+    let compatibility_report = compatibility(&request)?;
+    print_compatibility_report(&compatibility_report);
     let conversion_plan = plan(&request)?;
 
     println!(
@@ -137,10 +139,20 @@ fn convert_command(
         conversion_plan.source_format, conversion_plan.target_format
     );
     println!("Target: {}", conversion_plan.target);
+    println!("Execution: {}", conversion_plan.execution);
+    if let Some(backend) = &conversion_plan.backend {
+        println!("Backend: {backend}");
+    }
     println!("Lossy: {}", conversion_plan.lossy);
     println!("Steps:");
     for step in &conversion_plan.steps {
         println!("- {step}");
+    }
+    if !conversion_plan.notes.is_empty() {
+        println!("Notes:");
+        for note in &conversion_plan.notes {
+            println!("- {note}");
+        }
     }
 
     if plan_only {
@@ -151,6 +163,30 @@ fn convert_command(
     println!("Converted bundle: {}", request.target);
 
     Ok(())
+}
+
+fn print_compatibility_report(report: &CompatibilityReport) {
+    println!("Compatibility status: {}", report.status);
+    if let Some(source_format) = report.source_format {
+        println!("Resolved source format: {source_format}");
+    }
+    println!("Requested target format: {}", report.target_format);
+    println!("Lossy: {}", report.lossy);
+    if let Some(backend) = &report.backend {
+        println!("Compatible backend: {backend}");
+    }
+    if !report.blockers.is_empty() {
+        println!("Blockers:");
+        for blocker in &report.blockers {
+            println!("- {blocker}");
+        }
+    }
+    if !report.notes.is_empty() {
+        println!("Compatibility notes:");
+        for note in &report.notes {
+            println!("- {note}");
+        }
+    }
 }
 
 fn validate_command(path: &Path, expected: Option<Format>) -> Result<()> {

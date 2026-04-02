@@ -34,7 +34,11 @@ fn convert_executes_local_gguf_backend() {
     assert!(output.status.success());
 
     let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: gguf-to-hf-safetensors"));
     assert!(stdout.contains("Planned conversion: gguf -> hf-safetensors"));
+    assert!(stdout.contains("Execution: executable"));
+    assert!(stdout.contains("Backend: gguf-to-hf-safetensors"));
     assert!(stdout.contains("Lossy: true"));
     assert!(stdout.contains(&format!("Converted bundle: {}", output_path.display())));
 
@@ -76,8 +80,81 @@ fn convert_requires_allow_lossy_for_cli() {
 
     assert!(!output.status.success());
 
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Blockers:"));
+    assert!(stdout.contains("lossy conversion requires explicit opt-in"));
+
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("lossy conversion requires explicit opt-in: gguf -> hf-safetensors"));
+}
+
+#[test]
+fn convert_executes_local_gguf_to_safetensors_backend() {
+    let temp = tempdir().unwrap();
+    let source_path = temp.path().join("fixture.gguf");
+    let output_path = temp.path().join("weights.safetensors");
+
+    write_fixture_gguf(&source_path);
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            source_path.to_str().unwrap(),
+            "--output",
+            output_path.to_str().unwrap(),
+            "--to",
+            "safetensors",
+            "--allow-lossy",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: gguf-to-safetensors"));
+    assert!(stdout.contains("Planned conversion: gguf -> safetensors"));
+    assert!(stdout.contains("Execution: executable"));
+    assert!(stdout.contains("Backend: gguf-to-safetensors"));
+    assert!(stdout.contains(&format!("Converted bundle: {}", output_path.display())));
+    assert!(output_path.is_file());
+}
+
+#[test]
+fn convert_plan_only_reports_unsupported_path_reasoning() {
+    let temp = tempdir().unwrap();
+    let output_path = temp.path().join("bundle");
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            "hf://example/model-safetensors",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--from",
+            "safetensors",
+            "--to",
+            "mlx",
+            "--plan-only",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: unsupported"));
+    assert!(stdout.contains("Blockers:"));
+    assert!(stdout.contains("no registered conversion capability exists for `safetensors -> mlx`"));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unsupported conversion path: safetensors -> mlx"));
 }
 
 fn write_fixture_gguf(path: &std::path::Path) {

@@ -20,28 +20,32 @@ Stable boundaries:
 
 Moving boundaries:
 
-- The internal module layout of the library is still early and will likely grow toward `source`, `format`, `plan`, `transform`, `validate`, `cache`, and `publish`.
+- `crates/metamorph/src/lib.rs` is now a facade over `source.rs`, `format.rs`, `plan.rs`, `transform.rs`, `validate.rs`, `cache.rs`, and `publish.rs`.
+- The capability registry and compatibility-report surface are now explicit, but future backend breadth is still being defined.
 - Concrete remote fetchers and remote upload implementations are still being defined.
 
 ## Key Components
 
-- Domain surface: `Format`, `Source`, `Target`, `InspectReport`, `ConvertRequest`, `ConversionPlan`, `CacheIdentity`, `SourceAcquisitionReport`, `ValidationReport`, `PublishPlan`, and `MetamorphError` in `crates/metamorph/src/lib.rs`.
-- Inspection and planning: `inspect()` infers a format from local or Hugging Face style inputs; `plan()` turns a request into an explicit conversion plan and enforces lossy opt-in.
+- Facade surface: `crates/metamorph/src/lib.rs` re-exports the public workflow from the internal modules so callers and the CLI do not have to chase file layout.
+- Domain modules: `format.rs`, `source.rs`, `plan.rs`, `validate.rs`, `cache.rs`, and `publish.rs` own the corresponding concepts and reports such as `Format`, `Source`, `InspectReport`, `ConvertRequest`, `CompatibilityReport`, `ConversionPlan`, `CacheIdentity`, `SourceAcquisitionReport`, `ValidationReport`, and `PublishPlan`.
+- Inspection and planning: `inspect()` infers a format from local or Hugging Face style inputs; `compatibility()` and `plan()` turn a request into explicit compatibility and conversion reports while enforcing lossy opt-in.
 - Cache and acquisition: `cache_identity()` and `acquire_source()` expose deterministic local cache paths plus explicit reuse, materialization, cache-hit, and cache-miss outcomes.
-- Execution surface: `convert()` executes the first local `gguf -> hf-safetensors` backend and resolves GGUF inputs through the acquisition layer.
+- Transform surface: `transform.rs` owns the capability registry and backend dispatch, with executable `gguf -> hf-safetensors` and `gguf -> safetensors` backends plus planned-only compatibility entries for additional paths.
 - Validation and publish surface: `validate()` marks reusable outputs explicitly; `plan_publish()` and `publish()` expose a preview-first upload path with explicit execution gating and credential checks.
-- CLI surface: `crates/metamorph-cli/src/main.rs` exposes `inspect`, `convert`, `validate`, `upload`, and `cache`, with `cache source` and `upload` now rendering acquisition and publish preflight details directly.
+- CLI surface: `crates/metamorph-cli/src/main.rs` exposes `inspect`, `convert`, `validate`, `upload`, and `cache`, with `convert` now rendering compatibility reasoning from the shared registry before planning or execution.
 
 ## Technical Boundaries
 
 - Put new product behavior in `crates/metamorph`, not in the CLI crate.
 - Keep the CLI thin. It should compose library types and report results, not hide business rules.
 - Keep transport concerns separate from tensor transformation concerns.
+- Derive compatibility reporting, supported paths, and backend selection from the same registry-driven truth.
 - Preserve the distinction between:
   - source location
   - source format
   - target format
   - output layout
+  - compatibility assessment
   - conversion plan
 - Keep runtime-specific loaders and adapters at the edges so the core remains reusable across applications.
 

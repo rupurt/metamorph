@@ -1,13 +1,16 @@
 ---
 # system-managed
 id: VFboWLpym
-status: active
+status: verified
 created_at: 2026-04-01T22:34:20
-updated_at: 2026-04-02T11:03:35
+updated_at: 2026-04-02T11:22:59
 # authored
 title: Turn Metamorph Into An Extensible Conversion Platform
 watch: ~
 activated_at: 2026-04-02T11:03:35
+achieved_at: 2026-04-02T11:22:56
+verified_at: 2026-04-02T11:22:59
+verification_artifact: .keel/missions/VFboWLpym/verification.gif
 ---
 
 # Turn Metamorph Into An Extensible Conversion Platform

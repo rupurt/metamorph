@@ -22,10 +22,10 @@ mission: VFboWLpym
 ## Voyages
 
 <!-- BEGIN GENERATED -->
-**Progress:** 0/3 voyages complete, 0/11 stories done
+**Progress:** 3/3 voyages complete, 11/11 stories done
 | Voyage | Status | Stories |
 |--------|--------|---------|
-| [Extract Stable Library Modules](voyages/VFepwxnmQ/) | planned | 0/4 |
-| [Add Backend Registry And Second Path](voyages/VFepxZZwT/) | planned | 0/4 |
-| [Surface Compatibility Reports And Extension Guidance](voyages/VFepyCJ2Q/) | planned | 0/3 |
+| [Extract Stable Library Modules](voyages/VFepwxnmQ/) | done | 4/4 |
+| [Add Backend Registry And Second Path](voyages/VFepxZZwT/) | done | 4/4 |
+| [Surface Compatibility Reports And Extension Guidance](voyages/VFepyCJ2Q/) | done | 3/3 |
 <!-- END GENERATED -->
