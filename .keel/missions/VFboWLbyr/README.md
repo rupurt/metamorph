@@ -1,12 +1,13 @@
 ---
 # system-managed
 id: VFboWLbyr
-status: defining
+status: active
 created_at: 2026-04-01T22:34:20
-updated_at: 2026-04-01T22:34:20
+updated_at: 2026-04-01T22:41:25
 # authored
 title: Ship The First End-To-End Candle Conversion Path
 watch: ~
+activated_at: 2026-04-01T22:41:25
 ---
 
 # Ship The First End-To-End Candle Conversion Path
