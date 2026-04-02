@@ -1,0 +1,16 @@
+---
+recorded_at: 2026-04-02T10:37:25.803239621-07:00
+command: zsh -lc "cd /home/alex/workspace/rupurt/metamorph && rg -n \"cache source|preview-first|HF_TOKEN|publish prerequisites\" README.md USER_GUIDE.md ARCHITECTURE.md CODE_WALKTHROUGH.md"
+---
+CODE_WALKTHROUGH.md:26:- `PublishPlan` and `PublishRequest`: the preview-first publish contract
+CODE_WALKTHROUGH.md:53:7. `plan_publish()` and `publish()` expose a preview-first upload path that validates local bundles before any remote write would occur.
+ARCHITECTURE.md:32:- Validation and publish surface: `validate()` marks reusable outputs explicitly; `plan_publish()` and `publish()` expose a preview-first upload path with explicit execution gating and credential checks.
+ARCHITECTURE.md:33:- CLI surface: `crates/metamorph-cli/src/main.rs` exposes `inspect`, `convert`, `validate`, `upload`, and `cache`, with `cache source` and `upload` now rendering acquisition and publish preflight details directly.
+USER_GUIDE.md:15:   - Use `metamorph cache source` to inspect the deterministic cache identity, local reuse path, or remote cache-miss location for that source.
+USER_GUIDE.md:24:   - Publish execution remains preview-first; `--execute` is explicit and currently stops on missing `HF_TOKEN` or the unwired remote backend instead of performing a hidden upload.
+README.md:95:metamorph cache source hf://prism-ml/Bonsai-8B-gguf@main
+README.md:97:metamorph cache source ./fixtures/bonsai.gguf --materialize
+README.md:118:`upload` is preview-first: without `--execute` it validates the bundle and renders the publish plan without mutating anything. With `--execute`, the CLI currently requires `HF_TOKEN` and then stops with an explicit not-yet-implemented message rather than attempting a hidden or partial remote write.
+README.md:274:- deterministic cache identity and source-acquisition reporting through `metamorph cache source`
+README.md:275:- preview-first upload planning with explicit `--execute` gating
+README.md:277:Remote fetch and remote publish execution are still planned. Current CLI behavior reports cache misses and publish prerequisites explicitly instead of performing hidden network side effects.

@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use metamorph::{ConvertRequest, Format, Source, Target, convert, inspect, plan, validate};
+use metamorph::{
+    ConvertRequest, Format, PublishRequest, Source, Target, acquire_source, cache_dir, convert,
+    inspect, plan, plan_publish, publish, validate,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -45,6 +48,8 @@ enum Command {
         input: PathBuf,
         #[arg(long)]
         repo: String,
+        #[arg(long)]
+        execute: bool,
     },
     Cache {
         #[command(subcommand)]
@@ -55,6 +60,13 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum CacheCommand {
     Dir,
+    Source {
+        input: String,
+        #[arg(long)]
+        from: Option<Format>,
+        #[arg(long)]
+        materialize: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -71,7 +83,11 @@ fn main() -> Result<()> {
             plan_only,
         } => convert_command(&input, output, from, to, allow_lossy, plan_only),
         Command::Validate { path, format } => validate_command(&path, format),
-        Command::Upload { input, repo } => upload_command(&input, &repo),
+        Command::Upload {
+            input,
+            repo,
+            execute,
+        } => upload_command(&input, &repo, execute),
         Command::Cache { command } => cache_command(command),
     }
 }
@@ -140,23 +156,86 @@ fn convert_command(
 fn validate_command(path: &Path, expected: Option<Format>) -> Result<()> {
     let report = validate(path, expected)?;
     println!("Validated {} as {}", path.display(), report.format);
+    println!("Reusable: {}", report.reusable);
+    if !report.checked_paths.is_empty() {
+        println!("Checked paths:");
+        for checked_path in report.checked_paths {
+            println!("- {}", checked_path.display());
+        }
+    }
+    if !report.notes.is_empty() {
+        println!("Notes:");
+        for note in report.notes {
+            println!("- {note}");
+        }
+    }
 
     Ok(())
 }
 
-fn upload_command(input: &PathBuf, repo: &str) -> Result<()> {
-    let _ = (input, repo);
-    bail!("upload support is not implemented yet");
+fn upload_command(input: &Path, repo: &str, execute: bool) -> Result<()> {
+    let plan = plan_publish(input, repo)?;
+
+    println!(
+        "Planned publish: {} -> {}",
+        plan.input.display(),
+        plan.destination
+    );
+    println!("Validated format: {}", plan.validated_format);
+    println!("Artifacts:");
+    for artifact in &plan.artifacts {
+        println!("- {}", artifact.display());
+    }
+    println!("Steps:");
+    for step in &plan.steps {
+        println!("- {step}");
+    }
+
+    let report = publish(&PublishRequest {
+        input: input.to_path_buf(),
+        target: Target::HuggingFaceRepo(repo.to_owned()),
+        execute,
+    })?;
+    println!("Executed: {}", report.executed);
+    if !report.notes.is_empty() {
+        println!("Notes:");
+        for note in report.notes {
+            println!("- {note}");
+        }
+    }
+
+    Ok(())
 }
 
 fn cache_command(command: CacheCommand) -> Result<()> {
     match command {
         CacheCommand::Dir => {
-            let cache_dir = std::env::var("XDG_CACHE_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from(".cache"))
-                .join("metamorph");
-            println!("{}", cache_dir.display());
+            println!("{}", cache_dir().display());
+            Ok(())
+        }
+        CacheCommand::Source {
+            input,
+            from,
+            materialize,
+        } => {
+            let source = Source::from_str(&input)
+                .with_context(|| format!("failed to parse source `{input}`"))?;
+            let report = acquire_source(&source, from, materialize)?;
+            println!("Source: {}", report.source);
+            match report.detected_format {
+                Some(format) => println!("Detected format: {format}"),
+                None => println!("Detected format: unknown"),
+            }
+            println!("Cache key: {}", report.cache_identity.key);
+            println!("Cache path: {}", report.cache_identity.path.display());
+            println!("Status: {}", report.outcome);
+            println!("Resolved path: {}", report.resolved_path.display());
+            if !report.notes.is_empty() {
+                println!("Notes:");
+                for note in report.notes {
+                    println!("- {note}");
+                }
+            }
             Ok(())
         }
     }

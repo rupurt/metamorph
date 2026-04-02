@@ -14,20 +14,23 @@ Metamorph is a Rust workspace plus Nix development shell for building a model-fo
 Stable boundaries:
 
 - The library crate owns format concepts, inspection, planning, validation, and future conversion execution.
+- The library crate also owns deterministic cache identity, source acquisition reporting, reusable-output validation, and publish planning.
 - The CLI crate owns argument parsing, human-readable output, and orchestration.
 - Nix owns packaging and toolchain setup, not product behavior.
 
 Moving boundaries:
 
 - The internal module layout of the library is still early and will likely grow toward `source`, `format`, `plan`, `transform`, `validate`, `cache`, and `publish`.
-- Concrete conversion backends, remote fetchers, and upload implementations are still being defined.
+- Concrete remote fetchers and remote upload implementations are still being defined.
 
 ## Key Components
 
-- Domain surface: `Format`, `Source`, `Target`, `InspectReport`, `ConvertRequest`, `ConversionPlan`, and `MetamorphError` in `crates/metamorph/src/lib.rs`.
+- Domain surface: `Format`, `Source`, `Target`, `InspectReport`, `ConvertRequest`, `ConversionPlan`, `CacheIdentity`, `SourceAcquisitionReport`, `ValidationReport`, `PublishPlan`, and `MetamorphError` in `crates/metamorph/src/lib.rs`.
 - Inspection and planning: `inspect()` infers a format from local or Hugging Face style inputs; `plan()` turns a request into an explicit conversion plan and enforces lossy opt-in.
-- Execution surface: `convert()` exists as the future execution seam and currently returns `NotImplemented`.
-- CLI surface: `crates/metamorph-cli/src/main.rs` exposes `inspect`, `convert`, `validate`, `upload`, and `cache`, with `convert` currently useful as a planning surface and `upload` still stubbed.
+- Cache and acquisition: `cache_identity()` and `acquire_source()` expose deterministic local cache paths plus explicit reuse, materialization, cache-hit, and cache-miss outcomes.
+- Execution surface: `convert()` executes the first local `gguf -> hf-safetensors` backend and resolves GGUF inputs through the acquisition layer.
+- Validation and publish surface: `validate()` marks reusable outputs explicitly; `plan_publish()` and `publish()` expose a preview-first upload path with explicit execution gating and credential checks.
+- CLI surface: `crates/metamorph-cli/src/main.rs` exposes `inspect`, `convert`, `validate`, `upload`, and `cache`, with `cache source` and `upload` now rendering acquisition and publish preflight details directly.
 
 ## Technical Boundaries
 

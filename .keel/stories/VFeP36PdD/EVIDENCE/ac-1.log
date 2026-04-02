@@ -1,0 +1,15 @@
+---
+recorded_at: 2026-04-02T10:36:00.488996637-07:00
+command: nix develop -c cargo test -p metamorph-cli --test cache cache_source_reports_remote_cache_miss
+---
+
+running 1 test
+test cache_source_reports_remote_cache_miss ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+--- stderr ---
+path '/home/alex/workspace/rupurt/metamorph/.keel' does not contain a 'flake.nix', searching up
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/cache.rs (/home/alex/.cache/cargo-target/metamorph/debug/deps/cache-b94b66cf726f5100)

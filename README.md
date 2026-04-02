@@ -61,28 +61,25 @@ The library should expose a structured conversion pipeline:
 - validate the output layout
 - write to disk, cache, or another destination
 
-At a high level, the library should feel something like this:
+At a high level, the library looks like this today:
 
 ```rust
 use metamorph::{ConvertRequest, Format, Source, Target};
 
 let result = metamorph::convert(ConvertRequest {
-    source: Source::hugging_face("prism-ml/Bonsai-8B-gguf"),
-    target: Target::local_dir("./cache/bonsai-candle"),
+    source: "hf://prism-ml/Bonsai-8B-gguf@main".parse::<Source>()?,
+    target: Target::LocalDir("./cache/bonsai-candle".into()),
     from: Some(Format::Gguf),
     to: Format::HfSafetensors,
-    revision: None,
     allow_lossy: true,
 })?;
 ```
 
-This is illustrative, not implemented API.
-
 ### CLI
 
-The CLI should be a thin, scriptable layer on top of the library.
+The CLI is a thin, scriptable layer on top of the library.
 
-Desired commands:
+Current commands:
 
 - `metamorph inspect`
 - `metamorph convert`
@@ -90,15 +87,19 @@ Desired commands:
 - `metamorph upload`
 - `metamorph cache`
 
-Desired examples:
+Current examples:
 
 ```bash
 metamorph inspect hf://prism-ml/Bonsai-8B-gguf
 
+metamorph cache source hf://prism-ml/Bonsai-8B-gguf@main
+
+metamorph cache source ./fixtures/bonsai.gguf --materialize
+
 metamorph convert \
   --from gguf \
   --to hf-safetensors \
-  --input hf://prism-ml/Bonsai-8B-gguf \
+  --input ./fixtures/bonsai.gguf \
   --output ./artifacts/bonsai-candle \
   --allow-lossy
 
@@ -107,7 +108,14 @@ metamorph validate ./artifacts/bonsai-candle --format hf-safetensors
 metamorph upload \
   --input ./artifacts/bonsai-candle \
   --repo your-org/Bonsai-8B-candle
+
+metamorph upload \
+  --input ./artifacts/bonsai-candle \
+  --repo your-org/Bonsai-8B-candle \
+  --execute
 ```
+
+`upload` is preview-first: without `--execute` it validates the bundle and renders the publish plan without mutating anything. With `--execute`, the CLI currently requires `HF_TOKEN` and then stops with an explicit not-yet-implemented message rather than attempting a hidden or partial remote write.
 
 ## Core concepts
 
@@ -165,9 +173,9 @@ It should solve one real workflow end to end.
 Suggested first targets:
 
 1. Inspect Hugging Face and local artifacts.
-2. Convert `gguf`-published models into a Candle-friendly Hugging Face-style safetensors layout.
-3. Validate that the output directory contains the files a downstream runtime expects.
-4. Support optional upload to a target Hugging Face repository.
+2. Convert local `gguf` models into a Candle-friendly Hugging Face-style safetensors layout.
+3. Validate that the output directory contains the files a downstream runtime expects and treat passing bundles as reusable outputs.
+4. Expose explicit cache identity and publish preview surfaces before wiring remote fetch and write backends.
 
 That gives downstream applications one dependable path:
 
@@ -230,7 +238,7 @@ Success is not "supports every model format."
 Success is:
 
 - another Rust project can depend on `metamorph` as a library
-- the CLI can perform a full fetch-convert-validate-upload workflow
+- the CLI can inspect, cache-plan, convert, validate, and preview publish behavior without hiding lossy or network-sensitive steps
 - downstream runtimes stop carrying bespoke conversion code
 - adding a new conversion path feels incremental instead of invasive
 
@@ -246,9 +254,8 @@ Success is:
 
 ### Phase 2
 
-- validation framework
-- resumable downloads and cache management
-- upload support
+- remote fetch backends for cache misses on `hf://` sources
+- remote upload execution once credentials, policy gates, and licensing review flow are explicit
 - richer metadata preservation
 
 ### Phase 3
@@ -259,7 +266,14 @@ Success is:
 
 ## Status
 
-This repository is currently in definition-first mode.
-The README is intentionally specific so it can drive the library and CLI design.
+This repository now ships:
+
+- source inspection for local paths and `hf://` references
+- a working local `gguf -> hf-safetensors` conversion path
+- validation that marks complete Hugging Face-style bundles as reusable outputs
+- deterministic cache identity and source-acquisition reporting through `metamorph cache source`
+- preview-first upload planning with explicit `--execute` gating
+
+Remote fetch and remote publish execution are still planned. Current CLI behavior reports cache misses and publish prerequisites explicitly instead of performing hidden network side effects.
 
 If you are building a runtime that needs to bridge model ecosystems, that is the exact problem `metamorph` is for.

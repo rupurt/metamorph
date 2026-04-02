@@ -1,0 +1,16 @@
+---
+recorded_at: 2026-04-02T10:35:50.063633372-07:00
+command: nix develop -c cargo test -p metamorph-cli --test validate
+---
+
+running 2 tests
+test validate_rejects_incomplete_hf_bundle ... ok
+test validate_accepts_complete_hf_bundle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+--- stderr ---
+path '/home/alex/workspace/rupurt/metamorph/.keel' does not contain a 'flake.nix', searching up
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/validate.rs (/home/alex/.cache/cargo-target/metamorph/debug/deps/validate-c3ebf07ff36d69c8)

@@ -22,9 +22,9 @@ mission: VFboWLXyp
 ## Voyages
 
 <!-- BEGIN GENERATED -->
-**Progress:** 0/2 voyages complete, 0/7 stories done
+**Progress:** 2/2 voyages complete, 7/7 stories done
 | Voyage | Status | Stories |
 |--------|--------|---------|
-| [Make Publish And Recovery Flows Explicit](voyages/VFeOTDZi1/) | planned | 0/3 |
-| [Stabilize Cache And Validation Reuse Loop](voyages/VFeOTEZi2/) | planned | 0/4 |
+| [Make Publish And Recovery Flows Explicit](voyages/VFeOTDZi1/) | done | 3/3 |
+| [Stabilize Cache And Validation Reuse Loop](voyages/VFeOTEZi2/) | done | 4/4 |
 <!-- END GENERATED -->

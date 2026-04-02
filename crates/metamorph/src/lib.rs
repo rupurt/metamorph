@@ -14,6 +14,7 @@ use thiserror::Error;
 use tokenizers::Tokenizer;
 
 pub type Result<T> = std::result::Result<T, MetamorphError>;
+const HF_TOKEN_ENV: &str = "HF_TOKEN";
 
 #[derive(Debug, Error)]
 pub enum MetamorphError {
@@ -37,6 +38,23 @@ pub enum MetamorphError {
     InvalidLocalGgufSource(String),
     #[error("output bundle at `{path}` is invalid: {reason}")]
     InvalidOutputBundle { path: PathBuf, reason: String },
+    #[error(
+        "source `{input}` is not cached locally yet; expected a managed artifact under `{cache_path}`. Recover by populating that cache entry or using a local source path."
+    )]
+    SourceNotCached { input: String, cache_path: PathBuf },
+    #[error("invalid publish destination `{0}`; expected `owner/name`")]
+    InvalidPublishDestination(String),
+    #[error(
+        "publish execution for `{destination}` requires credentials in `{credential_env}`. Set that environment variable or rerun without `--execute` to keep this as a dry run."
+    )]
+    PublishCredentialsRequired {
+        destination: String,
+        credential_env: &'static str,
+    },
+    #[error(
+        "remote publish execution is not implemented yet for `{0}`. Use the dry run to review the plan, keep the validated local bundle, and revisit execution once a backend and policy approval path exist."
+    )]
+    PublishExecutionNotImplemented(String),
     #[error("feature not implemented yet: {0}")]
     NotImplemented(&'static str),
     #[error(transparent)]
@@ -193,6 +211,71 @@ pub struct ConversionPlan {
 pub struct ValidationReport {
     pub path: PathBuf,
     pub format: Format,
+    pub reusable: bool,
+    pub checked_paths: Vec<PathBuf>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheIdentity {
+    pub key: String,
+    pub path: PathBuf,
+    pub source_format: Option<Format>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceAcquisitionOutcome {
+    ReusedLocalPath,
+    MaterializedLocalCopy,
+    CacheHit,
+    CacheMiss,
+}
+
+impl fmt::Display for SourceAcquisitionOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::ReusedLocalPath => "reused-local-path",
+            Self::MaterializedLocalCopy => "materialized-local-copy",
+            Self::CacheHit => "cache-hit",
+            Self::CacheMiss => "cache-miss",
+        };
+
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceAcquisitionReport {
+    pub source: Source,
+    pub detected_format: Option<Format>,
+    pub cache_identity: CacheIdentity,
+    pub outcome: SourceAcquisitionOutcome,
+    pub resolved_path: PathBuf,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishPlan {
+    pub input: PathBuf,
+    pub validated_format: Format,
+    pub destination: Target,
+    pub artifacts: Vec<PathBuf>,
+    pub steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishRequest {
+    pub input: PathBuf,
+    pub target: Target,
+    pub execute: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishReport {
+    pub plan: PublishPlan,
+    pub executed: bool,
+    pub notes: Vec<String>,
 }
 
 pub fn inspect(source: &Source) -> Result<InspectReport> {
@@ -279,6 +362,146 @@ pub fn plan(request: &ConvertRequest) -> Result<ConversionPlan> {
     })
 }
 
+pub fn cache_dir() -> PathBuf {
+    if let Ok(explicit) = std::env::var("METAMORPH_CACHE_DIR") {
+        return PathBuf::from(explicit);
+    }
+
+    if let Ok(xdg_cache_home) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg_cache_home).join("metamorph");
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".cache").join("metamorph");
+    }
+
+    PathBuf::from(".cache").join("metamorph")
+}
+
+pub fn cache_identity(source: &Source, from: Option<Format>) -> Result<CacheIdentity> {
+    let inspect_report = inspect(source)?;
+    let source_format = from.or(inspect_report.detected_format);
+    let cache_key = build_cache_key(source, source_format);
+    let source_kind = match source {
+        Source::LocalPath(_) => "local",
+        Source::HuggingFace { .. } => "hf",
+    };
+    let format_segment = source_format
+        .map(|format| format.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let locator_segment = cache_locator_segment(source);
+
+    Ok(CacheIdentity {
+        key: cache_key.clone(),
+        path: cache_dir()
+            .join("sources")
+            .join(source_kind)
+            .join(format_segment)
+            .join(format!("{locator_segment}-{cache_key}")),
+        source_format,
+    })
+}
+
+pub fn acquire_source(
+    source: &Source,
+    from: Option<Format>,
+    materialize_local_copy: bool,
+) -> Result<SourceAcquisitionReport> {
+    let inspect_report = inspect(source)?;
+    let cache_identity = cache_identity(source, from)?;
+    let detected_format = cache_identity
+        .source_format
+        .or(inspect_report.detected_format);
+    let mut notes = inspect_report.notes;
+
+    match source {
+        Source::LocalPath(path) => {
+            let resolved_source_path = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if materialize_local_copy {
+                let materialized = materialize_local_source(
+                    &resolved_source_path,
+                    &cache_identity.path,
+                    detected_format,
+                )?;
+                let outcome = if materialized.preexisting {
+                    SourceAcquisitionOutcome::CacheHit
+                } else {
+                    SourceAcquisitionOutcome::MaterializedLocalCopy
+                };
+                if outcome == SourceAcquisitionOutcome::MaterializedLocalCopy {
+                    notes.push(format!(
+                        "materialized a managed cache copy at `{}`",
+                        materialized.path.display()
+                    ));
+                } else {
+                    notes.push(format!(
+                        "reused an existing managed cache copy at `{}`",
+                        materialized.path.display()
+                    ));
+                }
+
+                return Ok(SourceAcquisitionReport {
+                    source: source.clone(),
+                    detected_format,
+                    cache_identity,
+                    outcome,
+                    resolved_path: materialized.path,
+                    notes,
+                });
+            }
+
+            notes.push(
+                "reused existing local source without copying it into managed storage".to_owned(),
+            );
+
+            Ok(SourceAcquisitionReport {
+                source: source.clone(),
+                detected_format,
+                cache_identity,
+                outcome: SourceAcquisitionOutcome::ReusedLocalPath,
+                resolved_path: resolved_source_path,
+                notes,
+            })
+        }
+        Source::HuggingFace { .. } => {
+            if let Some(cached_path) =
+                resolve_cached_source_path(&cache_identity.path, detected_format)?
+            {
+                notes.push(format!(
+                    "using cached source artifact at `{}`",
+                    cached_path.display()
+                ));
+                return Ok(SourceAcquisitionReport {
+                    source: source.clone(),
+                    detected_format,
+                    cache_identity,
+                    outcome: SourceAcquisitionOutcome::CacheHit,
+                    resolved_path: cached_path,
+                    notes,
+                });
+            }
+
+            notes.push(format!(
+                "remote fetch is not implemented yet; populate `{}` or use a local source path",
+                cache_identity.path.display()
+            ));
+
+            Ok(SourceAcquisitionReport {
+                source: source.clone(),
+                detected_format,
+                cache_identity: cache_identity.clone(),
+                outcome: SourceAcquisitionOutcome::CacheMiss,
+                resolved_path: expected_cached_source_path(
+                    &cache_identity.path,
+                    detected_format,
+                    source,
+                ),
+                notes,
+            })
+        }
+    }
+}
+
 pub fn convert(request: &ConvertRequest) -> Result<()> {
     let conversion_plan = plan(request)?;
 
@@ -295,7 +518,7 @@ pub fn validate(path: &Path, expected: Option<Format>) -> Result<ValidationRepor
     let inspect_report = inspect(&source)?;
 
     if let Some(expected) = expected {
-        validate_for_format(path, expected)?;
+        let checked_paths = validate_for_format(path, expected)?;
 
         if let Some(detected) = inspect_report.detected_format
             && detected != expected
@@ -309,18 +532,79 @@ pub fn validate(path: &Path, expected: Option<Format>) -> Result<ValidationRepor
         return Ok(ValidationReport {
             path: path.to_path_buf(),
             format: expected,
+            reusable: true,
+            checked_paths,
+            notes: vec![format!(
+                "bundle satisfies the reusable `{expected}` contract"
+            )],
         });
     }
 
     let detected = inspect_report
         .detected_format
         .ok_or_else(|| MetamorphError::UnknownFormatForSource(path.display().to_string()))?;
-    validate_for_format(path, detected)?;
+    let checked_paths = validate_for_format(path, detected)?;
 
     Ok(ValidationReport {
         path: path.to_path_buf(),
         format: detected,
+        reusable: true,
+        checked_paths,
+        notes: vec![format!(
+            "bundle satisfies the reusable `{detected}` contract"
+        )],
     })
+}
+
+pub fn plan_publish(input: &Path, repo: &str) -> Result<PublishPlan> {
+    validate_publish_destination(repo)?;
+    let validation = validate(input, Some(Format::HfSafetensors))?;
+    let artifacts = collect_publish_artifacts(input)?;
+
+    Ok(PublishPlan {
+        input: input.to_path_buf(),
+        validated_format: validation.format,
+        destination: Target::HuggingFaceRepo(repo.to_owned()),
+        artifacts,
+        steps: vec![
+            "validate the local bundle before any remote activity".to_owned(),
+            format!("preview the artifact set for hf://{repo}"),
+            "execute remote writes only after an explicit operator opt-in".to_owned(),
+        ],
+    })
+}
+
+pub fn publish(request: &PublishRequest) -> Result<PublishReport> {
+    let repo = match &request.target {
+        Target::HuggingFaceRepo(repo) => repo.clone(),
+        Target::LocalDir(path) => {
+            return Err(MetamorphError::UnsupportedExecutionTarget(
+                path.display().to_string(),
+            ));
+        }
+    };
+    let plan = plan_publish(&request.input, &repo)?;
+
+    if !request.execute {
+        return Ok(PublishReport {
+            plan,
+            executed: false,
+            notes: vec![format!(
+                "dry run only; rerun with --execute after reviewing licensing, credentials, and destination state for hf://{repo}"
+            )],
+        });
+    }
+
+    if std::env::var_os(HF_TOKEN_ENV).is_none() {
+        return Err(MetamorphError::PublishCredentialsRequired {
+            destination: format!("hf://{repo}"),
+            credential_env: HF_TOKEN_ENV,
+        });
+    }
+
+    Err(MetamorphError::PublishExecutionNotImplemented(format!(
+        "hf://{repo}"
+    )))
 }
 
 fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<()> {
@@ -349,11 +633,18 @@ fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<()> 
 }
 
 fn resolve_local_gguf_path(source: &Source) -> Result<PathBuf> {
-    match source {
-        Source::LocalPath(path) => resolve_local_gguf_path_from_fs(path),
-        Source::HuggingFace { .. } => Err(MetamorphError::UnsupportedExecutionSource(
-            source.display_name(),
-        )),
+    let acquisition = acquire_source(source, Some(Format::Gguf), false)?;
+
+    match acquisition.outcome {
+        SourceAcquisitionOutcome::ReusedLocalPath
+        | SourceAcquisitionOutcome::MaterializedLocalCopy
+        | SourceAcquisitionOutcome::CacheHit => {
+            resolve_local_gguf_path_from_fs(&acquisition.resolved_path)
+        }
+        SourceAcquisitionOutcome::CacheMiss => Err(MetamorphError::SourceNotCached {
+            input: source.display_name(),
+            cache_path: acquisition.cache_identity.path,
+        }),
     }
 }
 
@@ -569,7 +860,7 @@ fn write_json_file(path: &Path, value: &JsonValue) -> Result<()> {
     Ok(())
 }
 
-fn validate_for_format(path: &Path, format: Format) -> Result<()> {
+fn validate_for_format(path: &Path, format: Format) -> Result<Vec<PathBuf>> {
     match format {
         Format::HfSafetensors => validate_hf_safetensors_bundle(path),
         Format::Safetensors => validate_safetensors_artifacts(path),
@@ -579,7 +870,8 @@ fn validate_for_format(path: &Path, format: Format) -> Result<()> {
     }
 }
 
-fn validate_hf_safetensors_bundle(path: &Path) -> Result<()> {
+fn validate_hf_safetensors_bundle(path: &Path) -> Result<Vec<PathBuf>> {
+    let mut checked_paths = Vec::new();
     for required in [
         "config.json",
         "tokenizer.json",
@@ -593,6 +885,7 @@ fn validate_hf_safetensors_bundle(path: &Path) -> Result<()> {
                 reason: format!("missing required file `{required}`"),
             });
         }
+        checked_paths.push(required_path);
     }
 
     let report = inspect(&Source::LocalPath(path.to_path_buf()))?;
@@ -603,10 +896,10 @@ fn validate_hf_safetensors_bundle(path: &Path) -> Result<()> {
         });
     }
 
-    Ok(())
+    Ok(checked_paths)
 }
 
-fn validate_safetensors_artifacts(path: &Path) -> Result<()> {
+fn validate_safetensors_artifacts(path: &Path) -> Result<Vec<PathBuf>> {
     if !path.exists() {
         return Err(MetamorphError::MissingPath(path.to_path_buf()));
     }
@@ -620,7 +913,7 @@ fn validate_safetensors_artifacts(path: &Path) -> Result<()> {
         }
 
         candle_core::safetensors::load(path, &Device::Cpu)?;
-        return Ok(());
+        return Ok(vec![path.to_path_buf()]);
     }
 
     let safetensors_files = fs::read_dir(path)?
@@ -637,10 +930,14 @@ fn validate_safetensors_artifacts(path: &Path) -> Result<()> {
     }
 
     for safetensors_file in safetensors_files {
-        candle_core::safetensors::load(safetensors_file, &Device::Cpu)?;
+        candle_core::safetensors::load(&safetensors_file, &Device::Cpu)?;
     }
 
-    Ok(())
+    Ok(fs::read_dir(path)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|entry| detect_path_format(entry) == Some(Format::Safetensors))
+        .collect())
 }
 
 fn architecture_class_name(architecture: &str) -> String {
@@ -764,6 +1061,219 @@ fn supports_conversion(from: Format, to: Format) -> bool {
         )
 }
 
+fn build_cache_key(source: &Source, source_format: Option<Format>) -> String {
+    let mut key_input = match source {
+        Source::LocalPath(path) => format!(
+            "local:{}",
+            fs::canonicalize(path)
+                .unwrap_or_else(|_| path.clone())
+                .display()
+        ),
+        Source::HuggingFace { repo, revision } => {
+            format!("hf:{repo}@{}", revision.as_deref().unwrap_or("default"))
+        }
+    };
+
+    key_input.push(':');
+    key_input.push_str(
+        &source_format
+            .map(|format| format.to_string())
+            .unwrap_or_else(|| "unknown".to_owned()),
+    );
+
+    format!("{:016x}", fnv1a_hash(&key_input))
+}
+
+fn cache_locator_segment(source: &Source) -> String {
+    match source {
+        Source::LocalPath(path) => {
+            let label = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("local-source");
+            sanitize_cache_segment(label)
+        }
+        Source::HuggingFace { repo, revision } => {
+            let base = match revision {
+                Some(revision) => format!("{repo}-{revision}"),
+                None => repo.clone(),
+            };
+            sanitize_cache_segment(&base)
+        }
+    }
+}
+
+fn sanitize_cache_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let collapsed = sanitized
+        .split('-')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if collapsed.is_empty() {
+        "source".to_owned()
+    } else {
+        collapsed
+    }
+}
+
+fn fnv1a_hash(value: &str) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+
+    hash
+}
+
+fn expected_cached_source_path(
+    cache_root: &Path,
+    detected_format: Option<Format>,
+    source: &Source,
+) -> PathBuf {
+    match detected_format {
+        Some(Format::Gguf) => cache_root.join(cached_file_name(source, "gguf")),
+        Some(Format::Safetensors) => cache_root.join(cached_file_name(source, "safetensors")),
+        _ => cache_root.to_path_buf(),
+    }
+}
+
+fn cached_file_name(source: &Source, extension: &str) -> String {
+    let base = match source {
+        Source::LocalPath(path) => path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(sanitize_cache_segment)
+            .unwrap_or_else(|| "source".to_owned()),
+        Source::HuggingFace { repo, .. } => sanitize_cache_segment(repo),
+    };
+    format!("{base}.{extension}")
+}
+
+fn resolve_cached_source_path(path: &Path, format: Option<Format>) -> Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    match format {
+        Some(Format::Gguf) => resolve_local_gguf_path_from_fs(path).map(Some),
+        Some(Format::HfSafetensors) => {
+            validate_hf_safetensors_bundle(path)?;
+            Ok(Some(path.to_path_buf()))
+        }
+        Some(Format::Safetensors) => {
+            validate_safetensors_artifacts(path)?;
+            Ok(Some(path.to_path_buf()))
+        }
+        _ => Ok(Some(path.to_path_buf())),
+    }
+}
+
+struct MaterializedLocalSource {
+    path: PathBuf,
+    preexisting: bool,
+}
+
+fn materialize_local_source(
+    source_path: &Path,
+    cache_root: &Path,
+    detected_format: Option<Format>,
+) -> Result<MaterializedLocalSource> {
+    let destination = expected_cached_source_path(
+        cache_root,
+        detected_format,
+        &Source::LocalPath(source_path.to_path_buf()),
+    );
+
+    if destination.exists() || cache_root.exists() {
+        let resolved_path =
+            resolve_cached_source_path(cache_root, detected_format)?.unwrap_or(destination);
+        return Ok(MaterializedLocalSource {
+            path: resolved_path,
+            preexisting: true,
+        });
+    }
+
+    if source_path.is_file() {
+        fs::create_dir_all(cache_root)?;
+        fs::copy(source_path, &destination)?;
+        return Ok(MaterializedLocalSource {
+            path: destination,
+            preexisting: false,
+        });
+    }
+
+    copy_dir_all(source_path, cache_root)?;
+    Ok(MaterializedLocalSource {
+        path: cache_root.to_path_buf(),
+        preexisting: false,
+    })
+}
+
+fn copy_dir_all(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_all(&source_path, &destination_path)?;
+        } else {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_publish_destination(repo: &str) -> Result<()> {
+    let Some((owner, name)) = repo.split_once('/') else {
+        return Err(MetamorphError::InvalidPublishDestination(repo.to_owned()));
+    };
+
+    if owner.trim().is_empty()
+        || name.trim().is_empty()
+        || owner.contains(char::is_whitespace)
+        || name.contains(char::is_whitespace)
+    {
+        return Err(MetamorphError::InvalidPublishDestination(repo.to_owned()));
+    }
+
+    Ok(())
+}
+
+fn collect_publish_artifacts(path: &Path) -> Result<Vec<PathBuf>> {
+    if path.is_file() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+
+    let mut artifacts = fs::read_dir(path)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|entry| entry.is_file())
+        .collect::<Vec<_>>();
+    artifacts.sort();
+
+    Ok(artifacts)
+}
+
 fn detect_local_format(path: &Path, notes: &mut Vec<String>) -> Result<Option<Format>> {
     if !path.exists() {
         return Err(MetamorphError::MissingPath(path.to_path_buf()));
@@ -838,7 +1348,10 @@ fn detect_path_format(path: &Path) -> Option<Format> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvertRequest, Format, Source, Target, convert, inspect, plan, validate};
+    use super::{
+        ConvertRequest, Format, PublishRequest, Source, SourceAcquisitionOutcome, Target,
+        acquire_source, cache_identity, convert, inspect, plan, plan_publish, publish, validate,
+    };
     use candle_core::quantized::gguf_file;
     use candle_core::quantized::{GgmlDType, QTensor};
     use candle_core::{Device, Tensor};
@@ -847,7 +1360,10 @@ mod tests {
     use std::fs::{self, File};
     use std::io::{BufWriter, Write};
     use std::str::FromStr;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parses_hugging_face_source_with_revision() {
@@ -983,6 +1499,108 @@ mod tests {
     }
 
     #[test]
+    fn cache_identity_is_deterministic_for_local_source() {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("fixture.gguf");
+        write_fixture_gguf(&source_path);
+
+        let first = cache_identity(&Source::LocalPath(source_path.clone()), None).unwrap();
+        let second = cache_identity(&Source::LocalPath(source_path), None).unwrap();
+
+        assert_eq!(first.key, second.key);
+        assert_eq!(first.path, second.path);
+        assert_eq!(first.source_format, Some(Format::Gguf));
+    }
+
+    #[test]
+    fn cache_identity_changes_with_hf_revision() {
+        let main = cache_identity(
+            &Source::from_str("hf://prism-ml/Bonsai-8B-gguf@main").unwrap(),
+            None,
+        )
+        .unwrap();
+        let snapshot = cache_identity(
+            &Source::from_str("hf://prism-ml/Bonsai-8B-gguf@snapshot").unwrap(),
+            None,
+        )
+        .unwrap();
+
+        assert_ne!(main.key, snapshot.key);
+        assert_ne!(main.path, snapshot.path);
+    }
+
+    #[test]
+    fn acquire_source_reuses_existing_local_path() {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("fixture.gguf");
+        write_fixture_gguf(&source_path);
+
+        let report = acquire_source(&Source::LocalPath(source_path.clone()), None, false).unwrap();
+
+        assert_eq!(report.outcome, SourceAcquisitionOutcome::ReusedLocalPath);
+        assert_eq!(report.detected_format, Some(Format::Gguf));
+        assert_eq!(report.resolved_path, fs::canonicalize(source_path).unwrap());
+    }
+
+    #[test]
+    fn acquire_source_can_materialize_local_copy() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        let cache_root = temp.path().join("cache");
+        let source_path = temp.path().join("fixture.gguf");
+        write_fixture_gguf(&source_path);
+
+        unsafe { std::env::set_var("METAMORPH_CACHE_DIR", &cache_root) };
+        let report = acquire_source(&Source::LocalPath(source_path), None, true).unwrap();
+        unsafe { std::env::remove_var("METAMORPH_CACHE_DIR") };
+
+        assert_eq!(
+            report.outcome,
+            SourceAcquisitionOutcome::MaterializedLocalCopy
+        );
+        assert!(report.resolved_path.is_file());
+        assert!(report.cache_identity.path.is_dir());
+    }
+
+    #[test]
+    fn acquire_source_reports_cache_miss_for_remote_source() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        let cache_root = temp.path().join("cache");
+        let source = Source::from_str("hf://prism-ml/Bonsai-8B-gguf@main").unwrap();
+
+        unsafe { std::env::set_var("METAMORPH_CACHE_DIR", &cache_root) };
+        let report = acquire_source(&source, None, false).unwrap();
+        unsafe { std::env::remove_var("METAMORPH_CACHE_DIR") };
+
+        assert_eq!(report.outcome, SourceAcquisitionOutcome::CacheMiss);
+        assert!(
+            report
+                .resolved_path
+                .ends_with("prism-ml-bonsai-8b-gguf.gguf")
+        );
+    }
+
+    #[test]
+    fn acquire_source_uses_cached_remote_artifact_when_present() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        let cache_root = temp.path().join("cache");
+        let source = Source::from_str("hf://prism-ml/Bonsai-8B-gguf@main").unwrap();
+
+        unsafe { std::env::set_var("METAMORPH_CACHE_DIR", &cache_root) };
+        let identity = cache_identity(&source, None).unwrap();
+        fs::create_dir_all(&identity.path).unwrap();
+        let cached_source_path = identity.path.join("prism-ml-bonsai-8b-gguf.gguf");
+        write_fixture_gguf(&cached_source_path);
+        let report = acquire_source(&source, None, false).unwrap();
+        unsafe { std::env::remove_var("METAMORPH_CACHE_DIR") };
+
+        assert_eq!(report.outcome, SourceAcquisitionOutcome::CacheHit);
+        assert_eq!(report.resolved_path, cached_source_path);
+    }
+
+    #[test]
     fn converts_local_gguf_into_hf_safetensors_bundle() {
         let temp = tempdir().unwrap();
         let source_path = temp.path().join("fixture.gguf");
@@ -1048,6 +1666,44 @@ mod tests {
         let report = validate(temp.path(), Some(Format::HfSafetensors)).unwrap();
 
         assert_eq!(report.format, Format::HfSafetensors);
+        assert!(report.reusable);
+        assert_eq!(report.checked_paths.len(), 4);
+    }
+
+    #[test]
+    fn publish_plan_validates_bundle_and_lists_artifacts() {
+        let temp = tempdir().unwrap();
+        write_valid_hf_bundle(temp.path());
+
+        let plan = plan_publish(temp.path(), "your-org/Bonsai-8B-candle").unwrap();
+
+        assert_eq!(plan.validated_format, Format::HfSafetensors);
+        assert_eq!(
+            plan.destination,
+            Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into())
+        );
+        assert_eq!(plan.artifacts.len(), 4);
+    }
+
+    #[test]
+    fn publish_requires_credentials_for_execute_mode() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        write_valid_hf_bundle(temp.path());
+        unsafe { std::env::remove_var("HF_TOKEN") };
+
+        let error = publish(&PublishRequest {
+            input: temp.path().to_path_buf(),
+            target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+            execute: true,
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires credentials in `HF_TOKEN`")
+        );
     }
 
     fn write_fixture_gguf(path: &std::path::Path) {
