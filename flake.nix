@@ -41,7 +41,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [
+          packages = [
             rust
             keelPkg
             pkgs.just

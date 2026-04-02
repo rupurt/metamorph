@@ -1,0 +1,39 @@
+board_dir = ".keel"
+
+[workflow]
+open_for_work = true
+working_hours_start = 7
+working_hours_end = 19
+max_battery_packs = 20
+battery_decay_minutes = 30
+auto_install_hooks = true
+auto_stage = true
+
+[workflow.defaults]
+management_role = "manager"
+delivery_role = "operator"
+management_lane = "management"
+delivery_lane = "delivery"
+
+[roles.manager]
+default_lane = "management"
+operational_contract = "manager-core"
+
+[roles.operator]
+default_lane = "delivery"
+operational_contract = "operator-core"
+
+[lanes.management]
+description = "Planning, research, and manual-accept work"
+include = ["mission.defining", "bearing.*", "voyage.draft", "story.needs-human-verification"]
+manual_accept = true
+priority = 100
+
+[lanes.delivery]
+description = "Execution-ready delivery work"
+include = ["story.backlog", "story.in-progress"]
+parallel = true
+priority = 50
+
+[scoring]
+mode = "constrained"

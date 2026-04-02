@@ -20,7 +20,7 @@ build-release:
   cp -f "${CARGO_TARGET_DIR:-target}/release/metamorph" target/release/metamorph
 
 test *args:
-  cargo nextest run {{args}}
+  cargo nextest run --workspace {{args}}
 
 doctest:
   cargo test --doc
