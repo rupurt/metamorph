@@ -1,0 +1,13 @@
+[package]
+name = "metamorph"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Library support for converting local AI model artifacts between runtime-specific formats"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

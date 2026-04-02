@@ -1,0 +1,18 @@
+[package]
+name = "metamorph-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "CLI for converting local AI model artifacts between runtime-specific formats"
+
+[[bin]]
+name = "metamorph"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+metamorph.workspace = true
