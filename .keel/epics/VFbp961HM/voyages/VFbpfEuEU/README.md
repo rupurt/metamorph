@@ -27,11 +27,11 @@ started_at: 2026-04-01T22:41:25
 ## Stories
 
 <!-- BEGIN GENERATED -->
-**Progress:** 1/3 stories complete
+**Progress:** 2/3 stories complete
 
 | Title | Type | Status |
 |-------|------|--------|
 | [Implement Source Inspection Contract](../../../../stories/VFbpfFREX/README.md) | feat | done |
 | [Implement Candle Bundle Validation](../../../../stories/VFbpqCwMh/README.md) | feat | backlog |
-| [Implement GGUF To HF Safetensors Backend](../../../../stories/VFbpqDTMe/README.md) | feat | backlog |
+| [Implement GGUF To HF Safetensors Backend](../../../../stories/VFbpqDTMe/README.md) | feat | done |
 <!-- END GENERATED -->

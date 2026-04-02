@@ -131,7 +131,10 @@ fn convert_command(
         return Ok(());
     }
 
-    convert(&request).map_err(Into::into)
+    convert(&request)?;
+    println!("Converted bundle: {}", request.target);
+
+    Ok(())
 }
 
 fn validate_command(path: &Path, expected: Option<Format>) -> Result<()> {
