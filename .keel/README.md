@@ -26,7 +26,13 @@
 | [Add Backend Registry And Second Path](epics/VFepvp0Xe/voyages/VFepxZZwT/) | done |
 | [Surface Compatibility Reports And Extension Guidance](epics/VFepvp0Xe/voyages/VFepyCJ2Q/) | done |
 
-### [Remote Hugging Face Acquisition And Cache Materialization](epics/VFg6yYH7e/) (draft)
+### [Remote Hugging Face Acquisition And Cache Materialization](epics/VFg6yYH7e/) (active)
+
+| Voyage | Status |
+|--------|--------|
+| [Fetch Remote Sources Into Managed Cache](epics/VFg6yYH7e/voyages/VFg7mjSPU/) | planned |
+| [Wire Remote Fetch Into Cache And Conversion Flows](epics/VFg6yYH7e/voyages/VFg7nTfTq/) | planned |
+| [Harden Refresh Recovery And Documentation](epics/VFg6yYH7e/voyages/VFg7oHwbx/) | planned |
 
 ### [Guarded Hugging Face Publish Execution](epics/VFg6zB3Ej/) (draft)
 

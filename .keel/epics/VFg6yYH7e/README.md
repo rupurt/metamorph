@@ -22,7 +22,10 @@ mission: VFg6fZ9rW
 ## Voyages
 
 <!-- BEGIN GENERATED -->
-**Progress:** 0/0 voyages complete, 0/0 stories done
+**Progress:** 0/3 voyages complete, 0/10 stories done
 | Voyage | Status | Stories |
 |--------|--------|---------|
+| [Fetch Remote Sources Into Managed Cache](voyages/VFg7mjSPU/) | planned | 0/3 |
+| [Wire Remote Fetch Into Cache And Conversion Flows](voyages/VFg7nTfTq/) | planned | 0/3 |
+| [Harden Refresh Recovery And Documentation](voyages/VFg7oHwbx/) | planned | 0/4 |
 <!-- END GENERATED -->
