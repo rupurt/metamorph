@@ -342,8 +342,10 @@ fn detect_path_format(path: &Path) -> Option<Format> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConvertRequest, Format, Source, Target, plan};
+    use super::{ConvertRequest, Format, Source, Target, inspect, plan};
+    use std::fs;
     use std::str::FromStr;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_hugging_face_source_with_revision() {
@@ -391,5 +393,76 @@ mod tests {
         assert!(!plan.lossy);
         assert_eq!(plan.source_format, Format::Safetensors);
         assert_eq!(plan.target_format, Format::Safetensors);
+    }
+
+    #[test]
+    fn inspects_local_gguf_file() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("model.gguf");
+        fs::write(&path, b"gguf").unwrap();
+
+        let report = inspect(&Source::LocalPath(path)).unwrap();
+
+        assert_eq!(report.detected_format, Some(Format::Gguf));
+        assert!(report.notes.is_empty());
+    }
+
+    #[test]
+    fn inspects_hf_style_local_directory() {
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join("config.json"), b"{}").unwrap();
+        fs::write(temp.path().join("tokenizer.json"), b"{}").unwrap();
+        fs::write(temp.path().join("generation_config.json"), b"{}").unwrap();
+        fs::write(temp.path().join("model.safetensors"), b"weights").unwrap();
+
+        let report = inspect(&Source::LocalPath(temp.path().to_path_buf())).unwrap();
+
+        assert_eq!(report.detected_format, Some(Format::HfSafetensors));
+        assert!(
+            report
+                .notes
+                .contains(&"detected Hugging Face-style model layout".to_owned())
+        );
+    }
+
+    #[test]
+    fn inspects_partial_safetensors_directory_as_plain_safetensors() {
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join("weights.safetensors"), b"weights").unwrap();
+
+        let report = inspect(&Source::LocalPath(temp.path().to_path_buf())).unwrap();
+
+        assert_eq!(report.detected_format, Some(Format::Safetensors));
+        assert!(report.notes.contains(
+            &"found safetensors files but not a complete Hugging Face layout".to_owned()
+        ));
+    }
+
+    #[test]
+    fn inspects_hugging_face_source_and_reports_revision_note() {
+        let source = Source::from_str("hf://prism-ml/Bonsai-8B-gguf@main").unwrap();
+
+        let report = inspect(&source).unwrap();
+
+        assert_eq!(report.detected_format, Some(Format::Gguf));
+        assert!(
+            report
+                .notes
+                .contains(&"using pinned revision `main`".to_owned())
+        );
+    }
+
+    #[test]
+    fn reports_unknown_when_hugging_face_source_cannot_be_inferred() {
+        let source = Source::from_str("hf://example/model").unwrap();
+
+        let report = inspect(&source).unwrap();
+
+        assert_eq!(report.detected_format, None);
+        assert!(
+            report
+                .notes
+                .contains(&"format could not be inferred yet".to_owned())
+        );
     }
 }

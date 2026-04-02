@@ -11,3 +11,6 @@ description = "Library support for converting local AI model artifacts between r
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
