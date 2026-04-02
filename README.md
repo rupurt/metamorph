@@ -1,323 +1,385 @@
 # metamorph
 
-`metamorph` is a Rust library and CLI for converting local AI model artifacts between runtime-specific formats.
+`metamorph` is a Rust library and CLI for turning model artifacts from the format they are published in into the format a downstream runtime can actually load.
 
-It exists for the annoying gap between how models are published and how local runtimes actually consume them.
-One project ships `gguf`, another expects Hugging Face-style `config.json + tokenizer.json + safetensors`,
-and a third wants a completely different layout. `metamorph` is the glue.
+It is aimed at two audiences:
 
-## Why this exists
+- CLI operators who need a repeatable inspect -> plan -> convert -> validate -> publish-preview workflow
+- Rust integrators who want to embed that workflow instead of rebuilding it in one-off scripts
 
-Local-first AI stacks keep running into the same problem:
+## What Metamorph Does Today
 
-- model publishers optimize for one runtime
-- application runtimes support a different format
-- the missing conversion step gets rebuilt ad hoc in every project
+Metamorph currently ships a real, end-to-end local conversion path and the supporting planning surfaces around it.
 
-`metamorph` is meant to make that conversion step explicit, reusable, and automatable.
+| Surface | Works today | Important notes |
+| --- | --- | --- |
+| `inspect` | Local paths and `hf://repo[@revision]` sources | Hugging Face inspection is heuristic today; it infers format from the repo name rather than remote file listing |
+| `compatibility` / `plan` | Local paths and `hf://...` sources | Use `--from` or set `ConvertRequest { from: Some(...), .. }` when the source format cannot be inferred |
+| `convert` execution | `gguf -> hf-safetensors`, `gguf -> safetensors` | Execution is local-first; remote sources must already exist in the managed cache because remote fetch is not wired yet |
+| `validate` | Local `safetensors` files and local `hf-safetensors` bundles | Passing outputs are marked reusable |
+| `cache` | Deterministic cache identity, local materialization, remote cache hit/miss reporting | Remote fetch is not implemented yet |
+| `upload` | Publish preview for local `hf-safetensors` bundles | `--execute` requires `HF_TOKEN` and still stops because remote publish execution is not wired yet |
 
-The initial motivating case is straightforward:
+Executable conversion backends today:
 
-- a model is published in a runtime-oriented format such as `gguf`
-- a Rust application using Candle or another safetensors-based loader needs a different layout
-- the application should be able to download, convert, cache, and use the result without bespoke one-off scripts
+- `gguf -> hf-safetensors`
+- `gguf -> safetensors`
 
-## Project goals
+Planned-only compatibility paths today:
 
-- Provide a solid Rust library for model format conversion and artifact normalization.
-- Ship a CLI that can download source artifacts, convert them, validate the result, and optionally upload the output.
-- Make conversions composable so apps can embed `metamorph` instead of shelling out.
-- Preserve as much metadata as possible across conversions.
-- Standardize model layouts that local runtimes can actually consume.
-- Make caching, resumability, and deterministic outputs first-class.
+- same-format relayout
+- `safetensors -> hf-safetensors`
 
-## Non-goals
+## What Metamorph Does Not Do Yet
 
-- Training or fine-tuning models.
-- Serving inference directly.
-- Re-implementing every runtime loader.
-- Pretending all conversions are lossless.
+These gaps matter for both CLI usage and embedding:
 
-Some transformations are format changes. Others are material changes in representation, quantization, or precision.
-`metamorph` should make that distinction obvious.
+- It does not fetch remote Hugging Face sources on demand yet.
+- It does not perform real remote publish execution yet.
+- It does not treat every compatible path as executable.
+- It does not hide lossy conversion behind a silent fallback.
 
-## Target users
+If a path is planned-only, unknown, unsupported, or blocked by missing lossy opt-in, Metamorph is expected to say so explicitly.
 
-- Rust applications that need to ingest models dynamically
-- local AI runtimes that want a single conversion layer
-- developers migrating models between ecosystems
-- infrastructure teams publishing internal model mirrors
+## Quick Start
 
-## What `metamorph` should do
-
-### Library
-
-The library exposes a structured conversion pipeline:
-
-- fetch or read source artifacts
-- inspect and identify the source format
-- assess compatibility and construct a conversion plan
-- transform weights, config, tokenizer, and metadata
-- validate the output layout
-- write to disk, cache, or another destination
-
-At a high level, the library looks like this today:
-
-```rust
-use metamorph::{
-    compatibility, CompatibilityStatus, ConvertRequest, Format, Source, Target,
-};
-
-let request = ConvertRequest {
-    source: "hf://prism-ml/Bonsai-8B-gguf@main".parse::<Source>()?,
-    target: Target::LocalDir("./cache/bonsai-candle".into()),
-    from: Some(Format::Gguf),
-    to: Format::HfSafetensors,
-    allow_lossy: true,
-};
-
-let report = compatibility(&request)?;
-if report.status == CompatibilityStatus::Executable {
-    metamorph::convert(&request)?;
-}
-```
-
-`crates/metamorph/src/lib.rs` is now a facade over explicit `source`, `format`, `plan`, `transform`, `validate`, `cache`, and `publish` modules.
-
-### CLI
-
-The CLI is a thin, scriptable layer on top of the library.
-
-Current commands:
-
-- `metamorph inspect`
-- `metamorph convert`
-- `metamorph validate`
-- `metamorph upload`
-- `metamorph cache`
-
-Current examples:
+Enter the dev environment:
 
 ```bash
-metamorph inspect hf://prism-ml/Bonsai-8B-gguf
+direnv allow
+nix develop
+```
 
-metamorph cache source hf://prism-ml/Bonsai-8B-gguf@main
+Inside the shell, the CLI is available as `metamorph`.
 
-metamorph cache source ./fixtures/bonsai.gguf --materialize
+Top-level help:
 
+```bash
+metamorph --help
+```
+
+## CLI Workflows
+
+### 1. Inspect a source
+
+Inspect tells you what Metamorph thinks the source is and why.
+
+```bash
+metamorph inspect hf://prism-ml/Bonsai-8B-gguf@main
+```
+
+Example output:
+
+```text
+Source: hf://prism-ml/Bonsai-8B-gguf@main
+Detected format: gguf
+Notes:
+- using pinned revision `main`
+```
+
+Use `inspect` first when you are not sure whether a path is a single GGUF file, a plain safetensors artifact, or a Hugging Face-style bundle.
+
+### 2. Plan a conversion before executing it
+
+`convert --plan-only` is the highest-signal CLI entry point. It shows:
+
+- compatibility status
+- resolved source format
+- target format
+- whether the path is lossy
+- which backend would run
+- blockers
+- planned conversion steps
+
+```bash
 metamorph convert \
+  --input hf://prism-ml/Bonsai-8B-gguf@main \
+  --output ./tmp/bonsai-candle \
+  --to hf-safetensors \
+  --allow-lossy \
+  --plan-only
+```
+
+Example output:
+
+```text
+Compatibility status: executable
+Resolved source format: gguf
+Requested target format: hf-safetensors
+Lossy: true
+Compatible backend: gguf-to-hf-safetensors
+Compatibility notes:
+- using pinned revision `main`
+Planned conversion: gguf -> hf-safetensors
+Target: ./tmp/bonsai-candle
+Execution: executable
+Backend: gguf-to-hf-safetensors
+Lossy: true
+Steps:
+- fetch or read GGUF artifacts
+- materialize tensors into a Hugging Face-style safetensors layout
+- emit tokenizer and config files expected by downstream runtimes
+- validate the output bundle
+Notes:
+- using pinned revision `main`
+```
+
+Important distinction:
+
+- compatibility and planning work on local sources and `hf://...` sources
+- execution still needs a local GGUF artifact or a pre-populated cache entry for a remote source
+
+### 3. Execute a conversion
+
+For local execution, point `--input` at a local GGUF file or directory and use a local output path.
+
+```bash
+metamorph convert \
+  --input ./models/bonsai.gguf \
   --from gguf \
   --to hf-safetensors \
-  --input ./fixtures/bonsai.gguf \
   --output ./artifacts/bonsai-candle \
   --allow-lossy
+```
 
+For plain safetensors output:
+
+```bash
 metamorph convert \
+  --input ./models/bonsai.gguf \
   --from gguf \
   --to safetensors \
-  --input ./fixtures/bonsai.gguf \
   --output ./artifacts/bonsai.safetensors \
   --allow-lossy
+```
 
+If the safetensors output path is a directory rather than a `.safetensors` file, Metamorph writes `model.safetensors` inside that directory.
+
+Current execution rules:
+
+- `--allow-lossy` is required for both executable GGUF conversion paths
+- conversion outputs must be local filesystem targets
+- `hf://repo` is a publish destination, not a direct conversion target
+
+### 4. Validate an output bundle
+
+Validation tells you whether a local artifact satisfies a reusable contract.
+
+```bash
 metamorph validate ./artifacts/bonsai-candle --format hf-safetensors
+```
 
+Use `--format` when you want to enforce a specific downstream contract rather than just infer it.
+
+Supported validation contracts today:
+
+- `hf-safetensors`
+- `safetensors`
+
+### 5. Inspect cache state and materialize local sources
+
+Show the managed cache root:
+
+```bash
+metamorph cache dir
+```
+
+Inspect the deterministic cache identity for a source:
+
+```bash
+metamorph cache source hf://prism-ml/Bonsai-8B-gguf@main
+```
+
+Materialize a managed copy of a local source:
+
+```bash
+metamorph cache source ./models/bonsai.gguf --from gguf --materialize
+```
+
+`cache source` reports:
+
+- cache key
+- cache path
+- source format
+- status such as `reused-local-path`, `materialized-local-copy`, `cache-hit`, or `cache-miss`
+- the resolved path Metamorph would use next
+
+For remote sources today, `cache-miss` means the cache path is known but the fetch step is still a future seam.
+
+### 6. Preview a publish without mutating anything
+
+`upload` is preview-first.
+
+```bash
 metamorph upload \
   --input ./artifacts/bonsai-candle \
   --repo your-org/Bonsai-8B-candle
+```
 
+This validates the local bundle, lists the artifacts that would be published, and explains the next step. It does not perform a remote write.
+
+`--execute` is explicit:
+
+```bash
 metamorph upload \
   --input ./artifacts/bonsai-candle \
   --repo your-org/Bonsai-8B-candle \
   --execute
 ```
 
-`upload` is preview-first: without `--execute` it validates the bundle and renders the publish plan without mutating anything. With `--execute`, the CLI currently requires `HF_TOKEN` and then stops with an explicit not-yet-implemented message rather than attempting a hidden or partial remote write.
+Current behavior with `--execute`:
 
-`convert` is compatibility-first: before it plans or executes, it renders the assessed source format, compatibility status, lossy flag, registered backend when one exists, and any blockers such as missing lossy opt-in or an unwired execution backend.
+- requires `HF_TOKEN`
+- still stops with a not-yet-implemented error instead of attempting a partial upload
 
-## Core concepts
+## CLI Command Reference
 
-### Source
+Top-level commands:
 
-Where model artifacts come from:
+- `metamorph inspect <INPUT>`
+- `metamorph convert --input <INPUT> --output <OUTPUT> --to <FORMAT> [--from <FORMAT>] [--allow-lossy] [--plan-only]`
+- `metamorph validate <PATH> [--format <FORMAT>]`
+- `metamorph upload --input <PATH> --repo <OWNER/NAME> [--execute]`
+- `metamorph cache dir`
+- `metamorph cache source <INPUT> [--from <FORMAT>] [--materialize]`
 
-- local directories
-- local files
-- Hugging Face repositories
-- internal registries or object stores
+Accepted source forms:
 
-### Format
+- local file path
+- local directory path
+- `hf://owner/repo`
+- `hf://owner/repo@revision`
 
-How model data is represented:
+Formats understood today:
 
 - `gguf`
 - `safetensors`
+- `hf-safetensors`
 - `mlx`
-- runtime-specific layouts built on top of those formats
 
-### Layout
+## Library Integration Guide
 
-How artifacts are organized for a consumer:
+The library is the source of truth. The CLI is intentionally thin and mostly renders the reports returned by the library.
 
-- single-file model packages
-- Hugging Face repository structure
-- local runtime cache directories
-- application-specific bundles
+### Public workflow types
 
-### Conversion plan
+The main public workflow is built around these types:
 
-A concrete, inspectable description of what will happen:
+- `Source`
+- `Target`
+- `Format`
+- `ConvertRequest`
+- `CompatibilityReport`
+- `ConversionPlan`
+- `ValidationReport`
+- `CacheIdentity`
+- `SourceAcquisitionReport`
+- `PublishPlan`
+- `PublishReport`
 
-- direct repack
-- metadata rewrite
-- tensor rename or reshape
-- dequantization or requantization
-- tokenizer/config normalization
+### Plan before executing
 
-### Compatibility report
+For integrations, the safest default is:
 
-A structured description of whether a requested path is executable, planned-only, unsupported, or missing source-format information:
+1. parse a `Source`
+2. call `compatibility()`
+3. inspect `status`, `backend`, and `blockers`
+4. only call `convert()` when the path is executable and unblocked
 
-- resolved source format
-- requested target format
-- lossy status
-- registered backend, when one exists
-- blockers and recovery guidance
+```rust
+use std::path::Path;
+use std::str::FromStr;
 
-## Guiding principles
+use metamorph::{
+    compatibility, convert, validate, CompatibilityStatus, ConvertRequest, Format, Source, Target,
+};
 
-- Be explicit about lossy vs lossless conversions.
-- Separate artifact transport from tensor transformation.
-- Treat validation as part of conversion, not an afterthought.
-- Make the library composable before making the CLI fancy.
-- Prefer deterministic outputs so caches and uploads are stable.
-- Keep runtime-specific adapters at the edges.
+fn convert_local_model() -> metamorph::Result<()> {
+    let request = ConvertRequest {
+        source: Source::from_str("./models/bonsai.gguf")?,
+        target: Target::LocalDir("./artifacts/bonsai-candle".into()),
+        from: Some(Format::Gguf),
+        to: Format::HfSafetensors,
+        allow_lossy: true,
+    };
 
-## Initial format priorities
+    let report = compatibility(&request)?;
+    if report.status != CompatibilityStatus::Executable || !report.blockers.is_empty() {
+        eprintln!("conversion is not ready: {report:#?}");
+        return Ok(());
+    }
 
-The first useful version does not need to support everything.
-It should solve one real workflow end to end.
+    convert(&request)?;
+    let validation = validate(
+        Path::new("./artifacts/bonsai-candle"),
+        Some(Format::HfSafetensors),
+    )?;
+    assert!(validation.reusable);
 
-Suggested first targets:
-
-1. Inspect Hugging Face and local artifacts.
-2. Convert local `gguf` models into a Candle-friendly Hugging Face-style safetensors layout.
-3. Validate that the output directory contains the files a downstream runtime expects and treat passing bundles as reusable outputs.
-4. Expose explicit cache identity and publish preview surfaces before wiring remote fetch and write backends.
-
-That gives downstream applications one dependable path:
-
-- download
-- convert
-- cache
-- run
-
-## Motivating example
-
-An application may support only Candle-style local models with:
-
-- `config.json`
-- `tokenizer.json`
-- `generation_config.json`
-- `model.safetensors` or sharded safetensors
-
-But an upstream publisher may ship only:
-
-- `gguf`
-- runtime-specific quantization
-- metadata tuned for another loader
-
-`metamorph` should let the app say:
-
-```text
-I know how to run format X.
-The model exists in format Y.
-Fetch it, convert it, cache it, validate it, and hand me a path I can load.
+    Ok(())
+}
 ```
 
-## Current library surface
+Why check both `status` and `blockers`:
 
-The library is organized around these building blocks:
+- `status` tells you whether a compatible backend class exists
+- `blockers` tells you whether the specific request is still gated by something like missing lossy opt-in or an unwired execution backend
 
-- `source`: local and remote artifact acquisition
-- `format`: format detection and descriptors
-- `plan`: conversion planning and compatibility checks
-- `transform`: capability registry plus tensor and metadata transforms
-- `validate`: output verification
-- `cache`: reproducible local artifact storage
-- `publish`: upload or mirror operations
+### Treat transport and conversion as separate concerns
 
-## Current backend matrix
+`compatibility()` and `plan()` can reason about remote `hf://...` sources without downloading them.
 
-Executable today:
+`convert()` still resolves the input through source acquisition. That means:
 
-- `gguf -> hf-safetensors`
-- `gguf -> safetensors`
+- local sources execute directly
+- remote sources only execute when the managed cache already contains the expected artifact
+- integrations should handle cache population separately until remote fetch lands
 
-Planned-only compatibility today:
+Relevant helpers:
 
-- same-format relayout
-- `safetensors -> hf-safetensors`
+- `inspect()` for source detection
+- `cache_identity()` for deterministic cache location
+- `acquire_source()` for reuse, materialization, cache hit, or cache miss reporting
 
-Unsupported today:
+### Use validation as the reusable-output gate
 
-- paths without a registered capability such as `safetensors -> mlx`
+If you intend to cache, reuse, or publish an output, validate it first.
 
-## Error model
+```rust
+use std::path::Path;
 
-`metamorph` should fail clearly and early.
+use metamorph::{validate, Format};
 
-Examples:
+fn validate_bundle() -> metamorph::Result<()> {
+    let report = validate(Path::new("./artifacts/bonsai-candle"), Some(Format::HfSafetensors))?;
+    assert!(report.reusable);
+    Ok(())
+}
+```
 
-- unsupported source format
-- unsupported conversion path
-- required metadata missing
-- conversion would be lossy without explicit opt-in
-- output layout invalid for the requested target
+### Use publish planning as a safe integration surface
 
-## What success looks like
+`plan_publish()` is useful even before remote upload execution exists:
 
-Success is not "supports every model format."
+- it validates the input bundle
+- it lists the exact files that would be published
+- it keeps repo naming validation in one place
 
-Success is:
+## Behavioral Guarantees
 
-- another Rust project can depend on `metamorph` as a library
-- the CLI can inspect, assess compatibility, cache-plan, convert, validate, and preview publish behavior without hiding lossy or network-sensitive steps
-- downstream runtimes stop carrying bespoke conversion code
-- adding a new conversion path feels incremental instead of invasive
+The current repo contract is:
 
-## Roadmap
+- lossy conversions require explicit opt-in
+- compatibility reporting and execution dispatch come from the same registry-driven truth
+- validation is part of the conversion workflow, not an optional afterthought
+- caching is deterministic and inspectable
+- upload is preview-first
+- the library surface stays ahead of the CLI surface
 
-### Phase 1
+## Repository Map
 
-- crate structure
-- format inspection
-- local and Hugging Face sources
-- basic conversion planning
-- Candle-oriented safetensors layout emission
-
-### Phase 2
-
-- remote fetch backends for cache misses on `hf://` sources
-- remote upload execution once credentials, policy gates, and licensing review flow are explicit
-- richer metadata preservation
-
-### Phase 3
-
-- plugin-style conversion backends
-- more runtime targets
-- smarter compatibility reporting
-
-## Status
-
-This repository now ships:
-
-- source inspection for local paths and `hf://` references
-- a working local `gguf -> hf-safetensors` conversion path
-- validation that marks complete Hugging Face-style bundles as reusable outputs
-- deterministic cache identity and source-acquisition reporting through `metamorph cache source`
-- preview-first upload planning with explicit `--execute` gating
-
-Remote fetch and remote publish execution are still planned. Current CLI behavior reports cache misses and publish prerequisites explicitly instead of performing hidden network side effects.
-
-If you are building a runtime that needs to bridge model ecosystems, that is the exact problem `metamorph` is for.
+- `crates/metamorph/` is the reusable library
+- `crates/metamorph-cli/` is the thin CLI
+- [USER_GUIDE.md](USER_GUIDE.md) is the operator playbook
+- [ARCHITECTURE.md](ARCHITECTURE.md) describes system boundaries
+- [CODE_WALKTHROUGH.md](CODE_WALKTHROUGH.md) maps commands and features to source files
