@@ -117,9 +117,13 @@ fn rejects_unsupported_conversion_paths() {
 }
 
 #[test]
-fn plans_same_format_relayout_without_loss() {
+fn plans_local_safetensors_relayout_as_executable() {
+    let temp = tempdir().unwrap();
+    let source_path = temp.path().join("weights.safetensors");
+    write_valid_safetensors(&source_path);
+
     let request = ConvertRequest {
-        source: Source::from_str("hf://example/model-safetensors").unwrap(),
+        source: Source::LocalPath(source_path),
         target: Target::LocalDir("target/out".into()),
         from: Some(Format::Safetensors),
         to: Format::Safetensors,
@@ -132,8 +136,88 @@ fn plans_same_format_relayout_without_loss() {
     assert!(!plan.lossy);
     assert_eq!(plan.source_format, Format::Safetensors);
     assert_eq!(plan.target_format, Format::Safetensors);
-    assert_eq!(plan.execution, ExecutionSupport::PlannedOnly);
-    assert_eq!(plan.backend.as_deref(), Some("same-format-relayout"));
+    assert_eq!(plan.execution, ExecutionSupport::Executable);
+    assert_eq!(plan.backend.as_deref(), Some("safetensors-relayout"));
+}
+
+#[test]
+fn compatibility_reclassifies_same_format_gguf_path_as_unsupported() {
+    let request = ConvertRequest {
+        source: Source::from_str("hf://prism-ml/Bonsai-8B-gguf").unwrap(),
+        target: Target::LocalDir("target/out.gguf".into()),
+        from: Some(Format::Gguf),
+        to: Format::Gguf,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let report = compatibility(&request).unwrap();
+
+    assert_eq!(report.status, CompatibilityStatus::Unsupported);
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("no registered conversion capability"))
+    );
+}
+
+#[test]
+fn compatibility_blocks_remote_requests_for_local_relayout() {
+    let request = ConvertRequest {
+        source: Source::from_str("hf://example/model-safetensors").unwrap(),
+        target: Target::LocalDir("target/out".into()),
+        from: Some(Format::Safetensors),
+        to: Format::Safetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let report = compatibility(&request).unwrap();
+
+    assert_eq!(report.status, CompatibilityStatus::Executable);
+    assert_eq!(report.backend.as_deref(), Some("safetensors-relayout"));
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("requires a local source path"))
+    );
+}
+
+#[test]
+fn compatibility_blocks_missing_metadata_for_bundle_materialization() {
+    let temp = tempdir().unwrap();
+    write_valid_safetensors(temp.path().join("weights.safetensors").as_path());
+
+    let request = ConvertRequest {
+        source: Source::LocalPath(temp.path().to_path_buf()),
+        target: Target::LocalDir(temp.path().join("bundle")),
+        from: None,
+        to: Format::HfSafetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let report = compatibility(&request).unwrap();
+
+    assert_eq!(report.status, CompatibilityStatus::Executable);
+    assert_eq!(
+        report.backend.as_deref(),
+        Some("safetensors-to-hf-safetensors")
+    );
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("missing `config.json`"))
+    );
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("missing `tokenizer.json`"))
+    );
 }
 
 #[test]
@@ -179,6 +263,21 @@ fn inspects_partial_safetensors_directory_as_plain_safetensors() {
             .notes
             .contains(&"found safetensors files but not a complete Hugging Face layout".to_owned())
     );
+}
+
+#[test]
+fn inspects_partial_hf_sidecars_as_plain_safetensors() {
+    let temp = tempdir().unwrap();
+    fs::write(temp.path().join("config.json"), b"{}").unwrap();
+    fs::write(temp.path().join("tokenizer.json"), b"{}").unwrap();
+    write_valid_safetensors(temp.path().join("weights.safetensors").as_path());
+
+    let report = inspect(&Source::LocalPath(temp.path().to_path_buf())).unwrap();
+
+    assert_eq!(report.detected_format, Some(Format::Safetensors));
+    assert!(report.notes.contains(
+        &"found safetensors files with partial Hugging Face metadata sidecars".to_owned()
+    ));
 }
 
 #[test]
@@ -622,6 +721,145 @@ fn converts_local_gguf_into_safetensors_artifact() {
 
     let tensors = candle_core::safetensors::load(&output_path, &Device::Cpu).unwrap();
     assert!(tensors.contains_key("tok_embeddings.weight"));
+}
+
+#[test]
+fn converts_local_safetensors_into_relayout_artifacts() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights.safetensors").as_path());
+
+    let request = ConvertRequest {
+        source: Source::LocalPath(source_dir.clone()),
+        target: Target::LocalDir(output_dir.clone()),
+        from: None,
+        to: Format::Safetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let report = convert(&request).unwrap();
+
+    assert_eq!(report.output, output_dir);
+    assert!(output_dir.join("weights.safetensors").is_file());
+    let validation = validate(&output_dir, Some(Format::Safetensors)).unwrap();
+    assert!(validation.reusable);
+}
+
+#[test]
+fn converts_local_hf_bundle_into_relayout_bundle() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_hf_bundle(&source_dir);
+    fs::write(source_dir.join("tokenizer_config.json"), b"{}").unwrap();
+
+    let request = ConvertRequest {
+        source: Source::LocalPath(source_dir.clone()),
+        target: Target::LocalDir(output_dir.clone()),
+        from: None,
+        to: Format::HfSafetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let report = convert(&request).unwrap();
+
+    assert_eq!(report.output, output_dir);
+    assert!(output_dir.join("config.json").is_file());
+    assert!(output_dir.join("tokenizer.json").is_file());
+    assert!(output_dir.join("generation_config.json").is_file());
+    assert!(output_dir.join("model.safetensors").is_file());
+    assert!(output_dir.join("tokenizer_config.json").is_file());
+    let validation = validate(&output_dir, Some(Format::HfSafetensors)).unwrap();
+    assert!(validation.reusable);
+}
+
+#[test]
+fn converts_metadata_backed_safetensors_into_hf_bundle() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights.safetensors").as_path());
+    fs::write(source_dir.join("config.json"), b"{}").unwrap();
+    fs::write(source_dir.join("tokenizer.json"), b"{}").unwrap();
+    fs::write(source_dir.join("tokenizer_config.json"), b"{}").unwrap();
+
+    let request = ConvertRequest {
+        source: Source::LocalPath(source_dir.clone()),
+        target: Target::LocalDir(output_dir.clone()),
+        from: None,
+        to: Format::HfSafetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let report = convert(&request).unwrap();
+
+    assert_eq!(report.output, output_dir);
+    assert!(output_dir.join("model.safetensors").is_file());
+    assert!(output_dir.join("config.json").is_file());
+    assert!(output_dir.join("tokenizer.json").is_file());
+    assert!(output_dir.join("generation_config.json").is_file());
+    assert!(output_dir.join("tokenizer_config.json").is_file());
+    let validation = validate(&output_dir, Some(Format::HfSafetensors)).unwrap();
+    assert!(validation.reusable);
+}
+
+#[test]
+fn bundle_materialization_rejects_missing_metadata_sidecars() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights.safetensors").as_path());
+
+    let request = ConvertRequest {
+        source: Source::LocalPath(source_dir.clone()),
+        target: Target::LocalDir(output_dir),
+        from: None,
+        to: Format::HfSafetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let error = convert(&request).unwrap_err();
+
+    assert!(error.to_string().contains("missing `config.json`"));
+    assert!(error.to_string().contains("missing `tokenizer.json`"));
+}
+
+#[test]
+fn bundle_materialization_rejects_multiple_safetensors_artifacts() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights-a.safetensors").as_path());
+    write_valid_safetensors(source_dir.join("weights-b.safetensors").as_path());
+    fs::write(source_dir.join("config.json"), b"{}").unwrap();
+    fs::write(source_dir.join("tokenizer.json"), b"{}").unwrap();
+
+    let request = ConvertRequest {
+        source: Source::LocalPath(source_dir.clone()),
+        target: Target::LocalDir(output_dir),
+        from: None,
+        to: Format::HfSafetensors,
+        allow_lossy: false,
+        refresh_remote: false,
+    };
+
+    let error = convert(&request).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("expects exactly one local `.safetensors` artifact")
+    );
 }
 
 #[test]

@@ -17,8 +17,14 @@ use crate::cache::{
 use crate::error::{MetamorphError, Result};
 use crate::format::Format;
 use crate::plan::{ConvertRequest, plan};
-use crate::source::{Target, resolve_local_gguf_path_from_fs};
+use crate::source::{Source, Target, detect_path_format, resolve_local_gguf_path_from_fs};
 use crate::validate::validate;
+
+const OPTIONAL_HF_SIDECAR_FILES: &[&str] = &[
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -39,6 +45,17 @@ impl fmt::Display for ExecutionSupport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionSourceSupport {
+    LocalOnly,
+    LocalOrRemoteGguf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionTargetSupport {
+    LocalOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConversionCapability {
     pub from: Format,
     pub to: Format,
@@ -46,6 +63,8 @@ pub struct ConversionCapability {
     pub execution_support: ExecutionSupport,
     backend: Option<BackendKind>,
     backend_label: Option<&'static str>,
+    source_support: ExecutionSourceSupport,
+    target_support: ExecutionTargetSupport,
     pub steps: &'static [&'static str],
 }
 
@@ -53,6 +72,12 @@ pub struct ConversionCapability {
 pub struct ConversionReport {
     pub acquisition: SourceAcquisitionReport,
     pub output: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RequestAssessment {
+    pub blockers: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 impl ConversionCapability {
@@ -65,12 +90,32 @@ impl ConversionCapability {
 enum BackendKind {
     GgufToHfSafetensors,
     GgufToSafetensors,
+    SafetensorsRelayout,
+    HfSafetensorsRelayout,
+    SafetensorsToHfSafetensors,
 }
 
-const SAME_FORMAT_STEPS: &[&str] = &[
-    "inspect source artifacts",
-    "normalize metadata and layout within the existing format",
-    "write the target bundle",
+#[derive(Debug, Clone)]
+struct BundleMaterializationSource {
+    tensor_path: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+    tokenizer_path: Option<PathBuf>,
+    generation_config_path: Option<PathBuf>,
+    optional_sidecars: Vec<PathBuf>,
+    blockers: Vec<String>,
+    notes: Vec<String>,
+}
+
+const SAFETENSORS_RELAYOUT_STEPS: &[&str] = &[
+    "inspect local safetensors artifacts",
+    "copy safetensors artifacts into the requested local layout",
+    "validate the output artifacts",
+];
+
+const HF_SAFETENSORS_RELAYOUT_STEPS: &[&str] = &[
+    "inspect the local hf-safetensors bundle",
+    "copy bundle files into the requested local layout",
+    "validate the output bundle",
 ];
 
 const GGUF_TO_HF_SAFETENSORS_STEPS: &[&str] = &[
@@ -87,24 +132,12 @@ const GGUF_TO_SAFETENSORS_STEPS: &[&str] = &[
 ];
 
 const SAFETENSORS_TO_HF_SAFETENSORS_STEPS: &[&str] = &[
-    "inspect safetensors artifacts",
-    "normalize files into a Hugging Face-style repository layout",
+    "inspect local safetensors artifacts and metadata sidecars",
+    "materialize files into a Hugging Face-style repository layout",
     "validate the output bundle",
 ];
 
 pub fn find_capability(from: Format, to: Format) -> Option<ConversionCapability> {
-    if from == to {
-        return Some(ConversionCapability {
-            from,
-            to,
-            lossy: false,
-            execution_support: ExecutionSupport::PlannedOnly,
-            backend: None,
-            backend_label: Some("same-format-relayout"),
-            steps: SAME_FORMAT_STEPS,
-        });
-    }
-
     match (from, to) {
         (Format::Gguf, Format::HfSafetensors) => Some(ConversionCapability {
             from,
@@ -113,6 +146,8 @@ pub fn find_capability(from: Format, to: Format) -> Option<ConversionCapability>
             execution_support: ExecutionSupport::Executable,
             backend: Some(BackendKind::GgufToHfSafetensors),
             backend_label: Some("gguf-to-hf-safetensors"),
+            source_support: ExecutionSourceSupport::LocalOrRemoteGguf,
+            target_support: ExecutionTargetSupport::LocalOnly,
             steps: GGUF_TO_HF_SAFETENSORS_STEPS,
         }),
         (Format::Gguf, Format::Safetensors) => Some(ConversionCapability {
@@ -122,19 +157,82 @@ pub fn find_capability(from: Format, to: Format) -> Option<ConversionCapability>
             execution_support: ExecutionSupport::Executable,
             backend: Some(BackendKind::GgufToSafetensors),
             backend_label: Some("gguf-to-safetensors"),
+            source_support: ExecutionSourceSupport::LocalOrRemoteGguf,
+            target_support: ExecutionTargetSupport::LocalOnly,
             steps: GGUF_TO_SAFETENSORS_STEPS,
+        }),
+        (Format::Safetensors, Format::Safetensors) => Some(ConversionCapability {
+            from,
+            to,
+            lossy: false,
+            execution_support: ExecutionSupport::Executable,
+            backend: Some(BackendKind::SafetensorsRelayout),
+            backend_label: Some("safetensors-relayout"),
+            source_support: ExecutionSourceSupport::LocalOnly,
+            target_support: ExecutionTargetSupport::LocalOnly,
+            steps: SAFETENSORS_RELAYOUT_STEPS,
+        }),
+        (Format::HfSafetensors, Format::HfSafetensors) => Some(ConversionCapability {
+            from,
+            to,
+            lossy: false,
+            execution_support: ExecutionSupport::Executable,
+            backend: Some(BackendKind::HfSafetensorsRelayout),
+            backend_label: Some("hf-safetensors-relayout"),
+            source_support: ExecutionSourceSupport::LocalOnly,
+            target_support: ExecutionTargetSupport::LocalOnly,
+            steps: HF_SAFETENSORS_RELAYOUT_STEPS,
         }),
         (Format::Safetensors, Format::HfSafetensors) => Some(ConversionCapability {
             from,
             to,
             lossy: false,
-            execution_support: ExecutionSupport::PlannedOnly,
-            backend: None,
+            execution_support: ExecutionSupport::Executable,
+            backend: Some(BackendKind::SafetensorsToHfSafetensors),
             backend_label: Some("safetensors-to-hf-safetensors"),
+            source_support: ExecutionSourceSupport::LocalOnly,
+            target_support: ExecutionTargetSupport::LocalOnly,
             steps: SAFETENSORS_TO_HF_SAFETENSORS_STEPS,
         }),
         _ => None,
     }
+}
+
+pub(crate) fn assess_request(
+    request: &ConvertRequest,
+    capability: &ConversionCapability,
+) -> Result<RequestAssessment> {
+    let mut assessment = RequestAssessment::default();
+
+    if capability.source_support == ExecutionSourceSupport::LocalOnly
+        && !matches!(request.source, Source::LocalPath(_))
+    {
+        assessment.blockers.push(format!(
+            "execution backend `{}` currently requires a local source path",
+            capability.backend_label().unwrap_or("local-only")
+        ));
+    }
+
+    if capability.target_support == ExecutionTargetSupport::LocalOnly
+        && !matches!(request.target, Target::LocalDir(_))
+    {
+        assessment.blockers.push(format!(
+            "execution backend `{}` currently requires a local output path",
+            capability.backend_label().unwrap_or("local-only")
+        ));
+    }
+
+    if matches!(
+        (capability.from, capability.to),
+        (Format::Safetensors, Format::HfSafetensors)
+    ) && assessment.blockers.is_empty()
+    {
+        let source_assessment = inspect_bundle_materialization_source_for_path(&request.source)?;
+        assessment.blockers.extend(source_assessment.blockers);
+        assessment.notes.extend(source_assessment.notes);
+    }
+
+    Ok(assessment)
 }
 
 pub fn convert(request: &ConvertRequest) -> Result<ConversionReport> {
@@ -154,6 +252,11 @@ pub fn convert(request: &ConvertRequest) -> Result<ConversionReport> {
     match capability.backend {
         Some(BackendKind::GgufToHfSafetensors) => convert_local_gguf_to_hf_safetensors(request),
         Some(BackendKind::GgufToSafetensors) => convert_local_gguf_to_safetensors(request),
+        Some(BackendKind::SafetensorsRelayout) => convert_local_safetensors_relayout(request),
+        Some(BackendKind::HfSafetensorsRelayout) => convert_local_hf_safetensors_relayout(request),
+        Some(BackendKind::SafetensorsToHfSafetensors) => {
+            convert_local_safetensors_to_hf_safetensors(request)
+        }
         None => Err(MetamorphError::NotImplemented(
             "execution backend for this compatible path is not wired yet",
         )),
@@ -211,6 +314,131 @@ fn convert_local_gguf_to_safetensors(request: &ConvertRequest) -> Result<Convers
     })
 }
 
+fn convert_local_safetensors_relayout(request: &ConvertRequest) -> Result<ConversionReport> {
+    let backend_label = "safetensors-relayout";
+    let acquisition = acquire_local_source(request, Some(Format::Safetensors), backend_label)?;
+    let source_artifacts = collect_local_safetensors_artifacts(&acquisition.resolved_path)?;
+    let target = resolve_local_target_dir(&request.target)?;
+
+    let output = if source_artifacts.len() == 1
+        && target.extension().and_then(|extension| extension.to_str()) == Some("safetensors")
+    {
+        copy_file_if_needed(&source_artifacts[0], &target)?;
+        validate(&target, Some(Format::Safetensors))?;
+        target
+    } else {
+        if source_artifacts.len() > 1
+            && target.extension().and_then(|extension| extension.to_str()) == Some("safetensors")
+        {
+            return Err(MetamorphError::InvalidLocalConversionSource {
+                path: acquisition.resolved_path.clone(),
+                reason: "multiple safetensors artifacts require a directory target".to_owned(),
+            });
+        }
+
+        fs::create_dir_all(&target)?;
+        for artifact in &source_artifacts {
+            let destination = target.join(
+                artifact
+                    .file_name()
+                    .expect("safetensors artifact should have a file name"),
+            );
+            copy_file_if_needed(artifact, &destination)?;
+        }
+        validate(&target, Some(Format::Safetensors))?;
+        target
+    };
+
+    Ok(ConversionReport {
+        acquisition,
+        output,
+    })
+}
+
+fn convert_local_hf_safetensors_relayout(request: &ConvertRequest) -> Result<ConversionReport> {
+    let backend_label = "hf-safetensors-relayout";
+    let acquisition = acquire_local_source(request, Some(Format::HfSafetensors), backend_label)?;
+    let source_dir = resolve_local_hf_safetensors_source_dir(&acquisition.resolved_path)?;
+    let target = resolve_local_target_dir(&request.target)?;
+
+    if source_dir == target {
+        validate(&target, Some(Format::HfSafetensors))?;
+        return Ok(ConversionReport {
+            acquisition,
+            output: target,
+        });
+    }
+
+    copy_directory_contents(&source_dir, &target)?;
+    validate(&target, Some(Format::HfSafetensors))?;
+
+    Ok(ConversionReport {
+        acquisition,
+        output: target,
+    })
+}
+
+fn convert_local_safetensors_to_hf_safetensors(
+    request: &ConvertRequest,
+) -> Result<ConversionReport> {
+    let backend_label = "safetensors-to-hf-safetensors";
+    let acquisition = acquire_local_source(request, Some(Format::Safetensors), backend_label)?;
+    let source = inspect_bundle_materialization_source(&acquisition.resolved_path)?;
+    let output_dir = resolve_local_target_dir(&request.target)?;
+
+    fs::create_dir_all(&output_dir)?;
+
+    copy_file_if_needed(
+        source
+            .tensor_path
+            .as_ref()
+            .expect("bundle materialization source should have a tensor path"),
+        &output_dir.join("model.safetensors"),
+    )?;
+    copy_file_if_needed(
+        source
+            .config_path
+            .as_ref()
+            .expect("bundle materialization source should have config.json"),
+        &output_dir.join("config.json"),
+    )?;
+    copy_file_if_needed(
+        source
+            .tokenizer_path
+            .as_ref()
+            .expect("bundle materialization source should have tokenizer.json"),
+        &output_dir.join("tokenizer.json"),
+    )?;
+
+    match &source.generation_config_path {
+        Some(path) => {
+            copy_file_if_needed(path, &output_dir.join("generation_config.json"))?;
+        }
+        None => {
+            write_json_file(
+                &output_dir.join("generation_config.json"),
+                &JsonValue::Object(JsonMap::new()),
+            )?;
+        }
+    }
+
+    for sidecar in &source.optional_sidecars {
+        let destination = output_dir.join(
+            sidecar
+                .file_name()
+                .expect("optional sidecar should have a file name"),
+        );
+        copy_file_if_needed(sidecar, &destination)?;
+    }
+
+    validate(&output_dir, Some(Format::HfSafetensors))?;
+
+    Ok(ConversionReport {
+        acquisition,
+        output: output_dir,
+    })
+}
+
 fn acquire_gguf_source(request: &ConvertRequest) -> Result<SourceAcquisitionReport> {
     acquire_source_with_options(
         &request.source,
@@ -218,6 +446,28 @@ fn acquire_gguf_source(request: &ConvertRequest) -> Result<SourceAcquisitionRepo
         SourceAcquisitionOptions {
             materialize_local_copy: false,
             refresh_remote: request.refresh_remote,
+        },
+    )
+}
+
+fn acquire_local_source(
+    request: &ConvertRequest,
+    expected_format: Option<Format>,
+    backend_label: &'static str,
+) -> Result<SourceAcquisitionReport> {
+    if !matches!(request.source, Source::LocalPath(_)) {
+        return Err(MetamorphError::UnsupportedExecutionSource(format!(
+            "{} (backend `{backend_label}` currently requires a local source path)",
+            request.source.display_name()
+        )));
+    }
+
+    acquire_source_with_options(
+        &request.source,
+        expected_format,
+        SourceAcquisitionOptions {
+            materialize_local_copy: false,
+            refresh_remote: false,
         },
     )
 }
@@ -238,6 +488,214 @@ fn resolve_local_safetensors_target(target: &Target) -> Result<PathBuf> {
     }
 
     Ok(path.join("model.safetensors"))
+}
+
+fn collect_local_safetensors_artifacts(path: &Path) -> Result<Vec<PathBuf>> {
+    if !path.exists() {
+        return Err(MetamorphError::MissingPath(path.to_path_buf()));
+    }
+
+    if path.is_file() {
+        return match detect_path_format(path) {
+            Some(Format::Safetensors) => Ok(vec![path.to_path_buf()]),
+            _ => Err(MetamorphError::InvalidLocalConversionSource {
+                path: path.to_path_buf(),
+                reason: "expected a local `.safetensors` file".to_owned(),
+            }),
+        };
+    }
+
+    let mut artifacts = fs::read_dir(path)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|entry| detect_path_format(entry) == Some(Format::Safetensors))
+        .collect::<Vec<_>>();
+    artifacts.sort();
+
+    if artifacts.is_empty() {
+        return Err(MetamorphError::InvalidLocalConversionSource {
+            path: path.to_path_buf(),
+            reason: "expected a local `.safetensors` file or a directory containing `.safetensors` artifacts".to_owned(),
+        });
+    }
+
+    Ok(artifacts)
+}
+
+fn resolve_local_hf_safetensors_source_dir(path: &Path) -> Result<PathBuf> {
+    if !path.is_dir() {
+        return Err(MetamorphError::InvalidLocalConversionSource {
+            path: path.to_path_buf(),
+            reason: "expected a local directory for `hf-safetensors` relayout".to_owned(),
+        });
+    }
+
+    validate(path, Some(Format::HfSafetensors))?;
+    Ok(path.to_path_buf())
+}
+
+fn inspect_bundle_materialization_source_for_path(
+    source: &Source,
+) -> Result<BundleMaterializationSource> {
+    match source {
+        Source::LocalPath(path) => inspect_bundle_materialization_source_from_local_path(path),
+        Source::HuggingFace { repo, revision } => {
+            let display = match revision {
+                Some(revision) => format!("hf://{repo}@{revision}"),
+                None => format!("hf://{repo}"),
+            };
+
+            Ok(BundleMaterializationSource {
+                tensor_path: None,
+                config_path: None,
+                tokenizer_path: None,
+                generation_config_path: None,
+                optional_sidecars: Vec::new(),
+                blockers: vec![format!(
+                    "`safetensors -> hf-safetensors` currently requires a local source path, not `{display}`"
+                )],
+                notes: Vec::new(),
+            })
+        }
+    }
+}
+
+fn inspect_bundle_materialization_source(path: &Path) -> Result<BundleMaterializationSource> {
+    let source = inspect_bundle_materialization_source_from_local_path(path)?;
+    if source.blockers.is_empty() {
+        Ok(source)
+    } else {
+        Err(MetamorphError::InvalidLocalConversionSource {
+            path: path.to_path_buf(),
+            reason: source.blockers.join(" "),
+        })
+    }
+}
+
+fn inspect_bundle_materialization_source_from_local_path(
+    path: &Path,
+) -> Result<BundleMaterializationSource> {
+    let artifacts = collect_local_safetensors_artifacts(path)?;
+    let sidecar_root = if path.is_file() {
+        path.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        path.to_path_buf()
+    };
+
+    let config_path = sidecar_root.join("config.json");
+    let tokenizer_path = sidecar_root.join("tokenizer.json");
+    let generation_config_path = sidecar_root.join("generation_config.json");
+
+    let mut blockers = Vec::new();
+    let mut notes = Vec::new();
+
+    let tensor_path = match artifacts.as_slice() {
+        [single] => Some(single.clone()),
+        _ => {
+            blockers.push(
+                "`safetensors -> hf-safetensors` currently expects exactly one local `.safetensors` artifact"
+                    .to_owned(),
+            );
+            None
+        }
+    };
+
+    let config = if config_path.is_file() {
+        Some(config_path)
+    } else {
+        blockers.push(
+            "source path is missing `config.json` required for `safetensors -> hf-safetensors`"
+                .to_owned(),
+        );
+        None
+    };
+
+    let tokenizer = if tokenizer_path.is_file() {
+        Some(tokenizer_path)
+    } else {
+        blockers.push(
+            "source path is missing `tokenizer.json` required for `safetensors -> hf-safetensors`"
+                .to_owned(),
+        );
+        None
+    };
+
+    let generation_config = if generation_config_path.is_file() {
+        Some(generation_config_path)
+    } else {
+        notes.push(
+            "source path is missing `generation_config.json`; the output bundle will emit an empty generation config"
+                .to_owned(),
+        );
+        None
+    };
+
+    let mut optional_sidecars = OPTIONAL_HF_SIDECAR_FILES
+        .iter()
+        .map(|name| sidecar_root.join(name))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    optional_sidecars.sort();
+
+    Ok(BundleMaterializationSource {
+        tensor_path,
+        config_path: config,
+        tokenizer_path: tokenizer,
+        generation_config_path: generation_config,
+        optional_sidecars,
+        blockers,
+        notes,
+    })
+}
+
+fn copy_directory_contents(source: &Path, target: &Path) -> Result<()> {
+    let entries = fs::read_dir(source)?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+
+    fs::create_dir_all(target)?;
+
+    for source_path in entries {
+        let destination = target.join(
+            source_path
+                .file_name()
+                .expect("directory entry should have a file name"),
+        );
+        if source_path.is_dir() {
+            copy_directory_contents(&source_path, &destination)?;
+        } else {
+            copy_file_if_needed(&source_path, &destination)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn copy_file_if_needed(source: &Path, target: &Path) -> Result<()> {
+    if same_location(source, target) {
+        return Ok(());
+    }
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, target)?;
+    Ok(())
+}
+
+fn same_location(source: &Path, target: &Path) -> bool {
+    if source == target {
+        return true;
+    }
+
+    if source.exists() && target.exists() {
+        return fs::canonicalize(source).ok() == fs::canonicalize(target).ok();
+    }
+
+    false
 }
 
 fn dequantize_gguf_tensors<R: std::io::Read + std::io::Seek>(

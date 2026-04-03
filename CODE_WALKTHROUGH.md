@@ -97,7 +97,7 @@ Key behaviors:
 - inspect the source first
 - combine inferred and explicit source format
 - look up a capability in the shared registry
-- surface blockers such as missing lossy opt-in or planned-only execution
+- surface blockers such as missing lossy opt-in, local-only execution, or missing metadata sidecars
 
 If you want to change how Metamorph answers “can this request run?”, start here and in `transform.rs`.
 
@@ -113,6 +113,9 @@ Today it contains:
 - `convert()`
 - the concrete `gguf -> hf-safetensors` backend
 - the concrete `gguf -> safetensors` backend
+- the concrete `safetensors -> safetensors` relayout backend
+- the concrete `hf-safetensors -> hf-safetensors` relayout backend
+- the concrete metadata-backed `safetensors -> hf-safetensors` backend
 - conversion reports that carry acquisition truth back to the caller
 
 This file is the highest-value starting point when you are:

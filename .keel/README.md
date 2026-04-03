@@ -42,5 +42,11 @@
 | [Wire Real Upload Execution Into Library And CLI](epics/VFg6zB3Ej/voyages/VFgfOkuYG/) | done |
 | [Harden Publish Recovery Proof And Documentation](epics/VFg6zB3Ej/voyages/VFgfOlTWF/) | done |
 
-### [Promote Compatible Paths Into Executable Flows](epics/VFg70aqT7/) (draft)
+### [Promote Compatible Paths Into Executable Flows](epics/VFg70aqT7/) (done)
+
+| Voyage | Status |
+|--------|--------|
+| [Reclassify The Compatibility Matrix For Executable Relayouts](epics/VFg70aqT7/voyages/VFlohn41F/) | done |
+| [Execute Local Relayout And Bundle Materialization](epics/VFg70aqT7/voyages/VFlohna1u/) | done |
+| [Prove And Document Compatible Path Promotion](epics/VFg70aqT7/voyages/VFloho8ze/) | done |
 

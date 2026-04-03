@@ -22,7 +22,10 @@ mission: VFg6h5n3I
 ## Voyages
 
 <!-- BEGIN GENERATED -->
-**Progress:** 0/0 voyages complete, 0/0 stories done
+**Progress:** 3/3 voyages complete, 10/10 stories done
 | Voyage | Status | Stories |
 |--------|--------|---------|
+| [Reclassify The Compatibility Matrix For Executable Relayouts](voyages/VFlohn41F/) | done | 3/3 |
+| [Execute Local Relayout And Bundle Materialization](voyages/VFlohna1u/) | done | 4/4 |
+| [Prove And Document Compatible Path Promotion](voyages/VFloho8ze/) | done | 3/3 |
 <!-- END GENERATED -->

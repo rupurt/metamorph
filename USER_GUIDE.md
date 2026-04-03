@@ -61,7 +61,7 @@ Read the output in this order:
 Current statuses mean:
 
 - `executable`: an execution backend exists for this path
-- `planned-only`: the path is known but execution is not wired yet
+- `planned-only`: reserved for a compatible path the registry knows but does not execute yet; the current shipped matrix does not rely on this placeholder
 - `unsupported`: no capability is registered for the requested path
 - `unknown-source-format`: Metamorph could not infer the source format
 
@@ -81,6 +81,15 @@ Current executable conversions:
 
 - `gguf -> hf-safetensors`
 - `gguf -> safetensors`
+- `safetensors -> safetensors`
+- `hf-safetensors -> hf-safetensors`
+- `safetensors -> hf-safetensors`
+
+Additional rules for the new local paths:
+
+- the relayout paths are local-only
+- `safetensors -> hf-safetensors` currently expects exactly one local `.safetensors` artifact plus `config.json` and `tokenizer.json`
+- if `generation_config.json` is missing, Metamorph writes an empty one into the target bundle and says so in the plan notes
 
 Example:
 
@@ -155,7 +164,7 @@ Common cases:
 - `unknown-source-format`
   - Add `--from <FORMAT>` or point at a more explicit local layout.
 - `planned-only`
-  - The path is recognized, but execution is not implemented yet. Choose an executable target or stay in planning mode.
+  - Reserved for future compatible-but-unwired paths. In the current matrix, blocked requests usually show `executable` plus blockers, while truly unsupported pairs show `unsupported`.
 - `unsupported`
   - No conversion capability exists for that source/target pair yet.
 - lossy opt-in failure
@@ -184,6 +193,7 @@ Common cases:
 Use Metamorph today when you need:
 
 - a real local GGUF conversion path
+- real local safetensors relayout and bundle normalization
 - on-demand fetch for representative remote GGUF sources
 - explicit compatibility reporting before execution
 - deterministic cache identity
@@ -193,6 +203,7 @@ Use Metamorph today when you need:
 Do not treat it yet as:
 
 - a generic Hugging Face downloader for every repo layout
+- a promise that every same-format path is meaningful or supported
 - a generic model registry sync engine
 - a repo-creation or branch-management client
 

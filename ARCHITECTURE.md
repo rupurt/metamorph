@@ -18,7 +18,7 @@ Metamorph is a Rust workspace plus a Nix development shell.
 | `source.rs` | `Source`, `Target`, source parsing, local inspection, remote-source description | Local inspection is filesystem-based; Hugging Face inspection is heuristic and naming-based |
 | `format.rs` | `Format` parsing and display | Formats currently modeled are `gguf`, `safetensors`, `hf-safetensors`, and `mlx` |
 | `plan.rs` | `ConvertRequest`, `CompatibilityReport`, `ConversionPlan` | Compatibility and planning are registry-driven and explicit about blockers |
-| `transform.rs` | capability registry and backend dispatch | GGUF execution backends are wired for local inputs and representative remote GGUF sources through acquisition |
+| `transform.rs` | capability registry and backend dispatch | GGUF execution plus local safetensors relayout and metadata-backed bundle materialization are wired through shared registry metadata |
 | `validate.rs` | reusable-output verification | Validation is implemented for `safetensors` and `hf-safetensors` contracts |
 | `cache.rs` | deterministic source cache identity, acquisition reporting, refresh control, and cache manifests | Local reuse/materialization and representative remote GGUF fetch/reuse/refresh are implemented |
 | `remote.rs` | Hugging Face acquisition seam and mock-backed fetch proof surface | The default provider uses `hf-hub`; the mock provider drives deterministic fetch tests |
@@ -57,16 +57,19 @@ Executable backends:
 
 - `gguf -> hf-safetensors`
 - `gguf -> safetensors`
-
-Planned-only paths:
-
-- same-format relayout
+- `safetensors -> safetensors`
+- `hf-safetensors -> hf-safetensors`
 - `safetensors -> hf-safetensors`
+
+Current reclassification:
+
+- generic same-format relayout is no longer advertised as one blanket placeholder
+- unsupported same-format requests such as `gguf -> gguf` are reported as `unsupported` until they have a real reusable-output contract
 
 Important consequence:
 
-- a path can be known to the registry without being executable
 - compatibility should be interpreted together with blockers, not as a binary yes/no
+- a backend can exist while a request is still blocked by local-only execution limits or missing metadata sidecars
 
 ## Transport vs Transformation
 

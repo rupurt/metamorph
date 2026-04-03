@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{MetamorphError, Result};
 use crate::format::Format;
 use crate::source::{Source, Target, inspect};
-use crate::transform::{ExecutionSupport, find_capability};
+use crate::transform::{ExecutionSupport, assess_request, find_capability};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConvertRequest {
@@ -120,7 +120,8 @@ pub fn compatibility(request: &ConvertRequest) -> Result<CompatibilityReport> {
         });
     };
 
-    let mut blockers = Vec::new();
+    let request_assessment = assess_request(request, &capability)?;
+    let mut blockers = request_assessment.blockers;
     if capability.lossy && !request.allow_lossy {
         blockers.push(format!(
             "lossy conversion requires explicit opt-in: {source_format} -> {}",
@@ -147,7 +148,10 @@ pub fn compatibility(request: &ConvertRequest) -> Result<CompatibilityReport> {
         lossy: capability.lossy,
         backend: capability.backend_label().map(str::to_owned),
         blockers,
-        notes,
+        notes: {
+            notes.extend(request_assessment.notes);
+            notes
+        },
     })
 }
 

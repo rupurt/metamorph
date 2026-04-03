@@ -135,17 +135,28 @@ pub(crate) fn detect_local_format(path: &Path, notes: &mut Vec<String>) -> Resul
             .file_name()
             .is_some_and(|name| name == "tokenizer.json")
     });
+    let has_generation_config = entries.iter().any(|entry| {
+        entry
+            .file_name()
+            .is_some_and(|name| name == "generation_config.json")
+    });
     let has_safetensors = entries
         .iter()
         .any(|entry| matches!(detect_path_format(entry), Some(Format::Safetensors)));
 
-    if has_config && has_tokenizer && has_safetensors {
+    if has_config && has_tokenizer && has_generation_config && has_safetensors {
         notes.push("detected Hugging Face-style model layout".to_owned());
         return Ok(Some(Format::HfSafetensors));
     }
 
     if has_safetensors {
-        notes.push("found safetensors files but not a complete Hugging Face layout".to_owned());
+        if has_config || has_tokenizer || has_generation_config {
+            notes.push(
+                "found safetensors files with partial Hugging Face metadata sidecars".to_owned(),
+            );
+        } else {
+            notes.push("found safetensors files but not a complete Hugging Face layout".to_owned());
+        }
         return Ok(Some(Format::Safetensors));
     }
 

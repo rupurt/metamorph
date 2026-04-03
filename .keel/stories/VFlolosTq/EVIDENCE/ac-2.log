@@ -1,0 +1,7 @@
+---
+recorded_at: 2026-04-03T15:54:21.989872288-07:00
+command: nix build .#metamorph
+---
+
+--- stderr ---
+Command timed out

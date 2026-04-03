@@ -15,7 +15,7 @@ Metamorph currently ships a real, end-to-end local conversion path and the suppo
 | --- | --- | --- |
 | `inspect` | Local paths and `hf://repo[@revision]` sources | Hugging Face inspection is heuristic today; it infers format from the repo name rather than remote file listing |
 | `compatibility` / `plan` | Local paths and `hf://...` sources | Use `--from` or set `ConvertRequest { from: Some(...), .. }` when the source format cannot be inferred |
-| `convert` execution | `gguf -> hf-safetensors`, `gguf -> safetensors` | Local GGUF conversion is fully wired; representative remote `hf://...` GGUF sources fetch on demand into managed cache and support explicit `--refresh` |
+| `convert` execution | `gguf -> hf-safetensors`, `gguf -> safetensors`, `safetensors -> safetensors`, `hf-safetensors -> hf-safetensors`, `safetensors -> hf-safetensors` | GGUF conversion supports representative remote `hf://...` GGUF fetch; the relayout and bundle-materialization paths are local-only and metadata-gated where required |
 | `validate` | Local `safetensors` files and local `hf-safetensors` bundles | Passing outputs are marked reusable |
 | `cache` | Deterministic cache identity, local materialization, remote fetch/reuse/refresh reporting | The current remote slice supports representative GGUF repos that expose exactly one GGUF artifact per revision |
 | `upload` | Preview and execute publish for local `hf-safetensors` bundles | `--execute` requires `HF_TOKEN`, targets an existing Hugging Face repo on `main`, and reports `complete`, `partial`, `guarded-refusal`, or `failed` outcomes explicitly |
@@ -24,22 +24,22 @@ Executable conversion backends today:
 
 - `gguf -> hf-safetensors`
 - `gguf -> safetensors`
-
-Planned-only compatibility paths today:
-
-- same-format relayout
+- `safetensors -> safetensors`
+- `hf-safetensors -> hf-safetensors`
 - `safetensors -> hf-safetensors`
+
+There is no blanket same-format placeholder anymore. Requests such as `gguf -> gguf` that do not yet have a truthful reusable-output contract are reclassified as `unsupported` instead of being labeled as vaguely planned.
 
 ## What Metamorph Does Not Do Yet
 
 These gaps matter for both CLI usage and embedding:
 
-- It does not treat every compatible path as executable.
+- It does not treat every format pair or same-format request as executable just because the names look compatible.
 - It does not fetch every Hugging Face repository layout; the current remote slice is limited to representative GGUF repos with one GGUF artifact per revision.
 - It does not create repos, choose alternate publish branches, or support non-Hugging-Face publish targets yet.
 - It does not hide lossy conversion behind a silent fallback.
 
-If a path is planned-only, unknown, unsupported, or blocked by missing lossy opt-in, Metamorph is expected to say so explicitly.
+If a path is unknown, unsupported, or blocked by missing lossy opt-in, missing metadata, or local-only execution limits, Metamorph is expected to say so explicitly.
 
 ## Quick Start
 
@@ -133,7 +133,7 @@ Important distinction:
 
 ### 3. Execute a conversion
 
-For local execution, point `--input` at a local GGUF file or directory and use a local output path.
+For local execution, point `--input` at a local source and use a local output path.
 
 ```bash
 metamorph convert \
@@ -157,11 +157,30 @@ metamorph convert \
 
 If the safetensors output path is a directory rather than a `.safetensors` file, Metamorph writes `model.safetensors` inside that directory.
 
+For local relayout of existing safetensors artifacts:
+
+```bash
+metamorph convert \
+  --input ./artifacts/original \
+  --output ./artifacts/normalized \
+  --to safetensors
+```
+
+For local promotion of a plain safetensors source into an `hf-safetensors` bundle, the source must provide:
+
+- exactly one `.safetensors` artifact
+- `config.json`
+- `tokenizer.json`
+
+If `generation_config.json` is missing, Metamorph writes an empty generation config into the target bundle and reports that note in planning output.
+
 Current execution rules:
 
 - `--allow-lossy` is required for both executable GGUF conversion paths
 - conversion outputs must be local filesystem targets
 - representative remote `hf://...` GGUF sources are fetched on demand before backend execution
+- `safetensors -> safetensors`, `hf-safetensors -> hf-safetensors`, and `safetensors -> hf-safetensors` are local-only execution paths
+- `safetensors -> hf-safetensors` currently expects one local safetensors artifact plus `config.json` and `tokenizer.json`
 - `--refresh` forces remote re-fetch instead of reusing an existing managed cache artifact
 - the current remote slice expects exactly one GGUF artifact at the selected repo revision
 - `hf://repo` is a publish destination, not a direct conversion target
@@ -340,7 +359,7 @@ fn convert_local_model() -> metamorph::Result<()> {
 Why check both `status` and `blockers`:
 
 - `status` tells you whether a compatible backend class exists
-- `blockers` tells you whether the specific request is still gated by something like missing lossy opt-in or an unwired execution backend
+- `blockers` tells you whether the specific request is still gated by things like missing lossy opt-in, local-only execution, or missing metadata sidecars
 
 ### Treat transport and conversion as separate concerns
 

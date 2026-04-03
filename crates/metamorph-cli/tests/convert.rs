@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -124,6 +125,171 @@ fn convert_executes_local_gguf_to_safetensors_backend() {
     assert!(stdout.contains("Backend: gguf-to-safetensors"));
     assert!(stdout.contains(&format!("Converted bundle: {}", output_path.display())));
     assert!(output_path.is_file());
+}
+
+#[test]
+fn convert_executes_local_safetensors_relayout() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights.safetensors").as_path());
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            source_dir.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--to",
+            "safetensors",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: safetensors-relayout"));
+    assert!(stdout.contains("Execution: executable"));
+    assert!(stdout.contains(&format!("Converted bundle: {}", output_dir.display())));
+    assert!(output_dir.join("weights.safetensors").is_file());
+}
+
+#[test]
+fn convert_executes_local_hf_bundle_relayout() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_hf_bundle(&source_dir);
+    fs::write(source_dir.join("tokenizer_config.json"), b"{}").unwrap();
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            source_dir.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--to",
+            "hf-safetensors",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: hf-safetensors-relayout"));
+    assert!(stdout.contains("Execution: executable"));
+    assert!(output_dir.join("model.safetensors").is_file());
+    assert!(output_dir.join("tokenizer_config.json").is_file());
+}
+
+#[test]
+fn convert_executes_metadata_backed_bundle_materialization() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights.safetensors").as_path());
+    fs::write(source_dir.join("config.json"), b"{}").unwrap();
+    fs::write(source_dir.join("tokenizer.json"), b"{}").unwrap();
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            source_dir.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--to",
+            "hf-safetensors",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: safetensors-to-hf-safetensors"));
+    assert!(stdout.contains("Execution: executable"));
+    assert!(stdout.contains("empty generation config"));
+    assert!(output_dir.join("model.safetensors").is_file());
+    assert!(output_dir.join("generation_config.json").is_file());
+}
+
+#[test]
+fn convert_reports_blocked_bundle_materialization() {
+    let temp = tempdir().unwrap();
+    let source_dir = temp.path().join("source");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&source_dir).unwrap();
+    write_valid_safetensors(source_dir.join("weights.safetensors").as_path());
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            source_dir.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--to",
+            "hf-safetensors",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: safetensors-to-hf-safetensors"));
+    assert!(stdout.contains("Blockers:"));
+    assert!(stdout.contains("missing `config.json`"));
+    assert!(stdout.contains("missing `tokenizer.json`"));
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("missing `config.json`"));
+}
+
+#[test]
+fn convert_reports_local_only_blocker_for_remote_relayout() {
+    let temp = tempdir().unwrap();
+    let output_path = temp.path().join("bundle");
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .args([
+            "convert",
+            "--input",
+            "hf://example/model-safetensors",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--from",
+            "safetensors",
+            "--to",
+            "safetensors",
+            "--plan-only",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Compatible backend: safetensors-relayout"));
+    assert!(stdout.contains("requires a local source path"));
 }
 
 #[test]
@@ -349,6 +515,21 @@ fn write_fixture_gguf(path: &std::path::Path) {
     let mut writer = BufWriter::new(File::create(path).unwrap());
     gguf_file::write(&mut writer, &metadata_refs, &tensor_refs).unwrap();
     writer.flush().unwrap();
+}
+
+fn write_valid_hf_bundle(path: &std::path::Path) {
+    fs::write(path.join("config.json"), b"{}").unwrap();
+    fs::write(path.join("tokenizer.json"), b"{}").unwrap();
+    fs::write(path.join("generation_config.json"), b"{}").unwrap();
+    write_valid_safetensors(path.join("model.safetensors").as_path());
+}
+
+fn write_valid_safetensors(path: &std::path::Path) {
+    let device = Device::Cpu;
+    let tensor = Tensor::from_vec(vec![0f32, 1.0, 2.0, 3.0], (2, 2), &device).unwrap();
+    let tensors = HashMap::from([("weight".to_owned(), tensor)]);
+
+    candle_core::safetensors::save(&tensors, path).unwrap();
 }
 
 fn write_mock_remote_gguf_repo(

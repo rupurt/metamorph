@@ -21,6 +21,8 @@ pub enum MetamorphError {
     InvalidHuggingFaceSource(String),
     #[error("path does not exist: {0}")]
     MissingPath(PathBuf),
+    #[error("source path `{path}` is invalid for conversion: {reason}")]
+    InvalidLocalConversionSource { path: PathBuf, reason: String },
     #[error("conversion execution does not support source `{0}` yet")]
     UnsupportedExecutionSource(String),
     #[error("conversion execution does not support target `{0}` yet")]
