@@ -1,11 +1,13 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
+use std::path::Path;
 
 use assert_cmd::Command;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::{GgmlDType, QTensor};
 use candle_core::{Device, Tensor};
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use tempfile::tempdir;
 
 #[test]
@@ -157,6 +159,128 @@ fn convert_plan_only_reports_unsupported_path_reasoning() {
     assert!(stderr.contains("unsupported conversion path: safetensors -> mlx"));
 }
 
+#[test]
+fn convert_executes_remote_gguf_backend_after_fetch() {
+    let temp = tempdir().unwrap();
+    let cache_dir = temp.path().join("cache");
+    let mock_root = temp.path().join("mock");
+    let output_path = temp.path().join("bundle");
+
+    write_mock_remote_gguf_repo(
+        &mock_root,
+        "prism-ml/Bonsai-8B-gguf",
+        "main",
+        "Bonsai-8B-Q4.gguf",
+        Some("sha-main-001"),
+    );
+
+    let output = Command::cargo_bin("metamorph")
+        .unwrap()
+        .env("METAMORPH_CACHE_DIR", &cache_dir)
+        .env("METAMORPH_HF_MOCK_ROOT", &mock_root)
+        .args([
+            "convert",
+            "--input",
+            "hf://prism-ml/Bonsai-8B-gguf@main",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--from",
+            "gguf",
+            "--to",
+            "hf-safetensors",
+            "--allow-lossy",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Compatibility status: executable"));
+    assert!(stdout.contains("Acquisition status: fetched-remote"));
+    assert!(stdout.contains("Acquisition path:"));
+    assert!(stdout.contains("fetched remote artifact"));
+    assert!(stdout.contains(&format!("Converted bundle: {}", output_path.display())));
+
+    for required in [
+        "config.json",
+        "tokenizer.json",
+        "generation_config.json",
+        "model.safetensors",
+    ] {
+        assert!(output_path.join(required).is_file());
+    }
+}
+
+#[test]
+fn convert_refreshes_remote_source_explicitly() {
+    let temp = tempdir().unwrap();
+    let cache_dir = temp.path().join("cache");
+    let mock_root = temp.path().join("mock");
+    let output_path = temp.path().join("bundle");
+
+    write_mock_remote_gguf_repo(
+        &mock_root,
+        "prism-ml/Bonsai-8B-gguf",
+        "main",
+        "Bonsai-8B-Q4.gguf",
+        Some("sha-main-001"),
+    );
+
+    let initial = Command::cargo_bin("metamorph")
+        .unwrap()
+        .env("METAMORPH_CACHE_DIR", &cache_dir)
+        .env("METAMORPH_HF_MOCK_ROOT", &mock_root)
+        .args([
+            "convert",
+            "--input",
+            "hf://prism-ml/Bonsai-8B-gguf@main",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--from",
+            "gguf",
+            "--to",
+            "hf-safetensors",
+            "--allow-lossy",
+        ])
+        .output()
+        .unwrap();
+    assert!(initial.status.success());
+
+    write_mock_remote_gguf_repo(
+        &mock_root,
+        "prism-ml/Bonsai-8B-gguf",
+        "main",
+        "Bonsai-8B-Q4.gguf",
+        Some("sha-main-002"),
+    );
+    let refreshed = Command::cargo_bin("metamorph")
+        .unwrap()
+        .env("METAMORPH_CACHE_DIR", &cache_dir)
+        .env("METAMORPH_HF_MOCK_ROOT", &mock_root)
+        .args([
+            "convert",
+            "--input",
+            "hf://prism-ml/Bonsai-8B-gguf@main",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--from",
+            "gguf",
+            "--to",
+            "hf-safetensors",
+            "--allow-lossy",
+            "--refresh",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(refreshed.status.success());
+
+    let stdout = String::from_utf8(refreshed.stdout).unwrap();
+    assert!(stdout.contains("Acquisition status: refreshed-remote"));
+    assert!(stdout.contains("resolved revision `sha-main-002`"));
+}
+
 fn write_fixture_gguf(path: &std::path::Path) {
     let device = Device::Cpu;
     let tensor = Tensor::from_vec(vec![0f32, 1.0, 2.0, 3.0], (2, 2), &device).unwrap();
@@ -225,4 +349,24 @@ fn write_fixture_gguf(path: &std::path::Path) {
     let mut writer = BufWriter::new(File::create(path).unwrap());
     gguf_file::write(&mut writer, &metadata_refs, &tensor_refs).unwrap();
     writer.flush().unwrap();
+}
+
+fn write_mock_remote_gguf_repo(
+    root: &Path,
+    repo: &str,
+    revision: &str,
+    artifact_name: &str,
+    resolved_revision: Option<&str>,
+) {
+    let repo_root = root.join(repo).join(revision);
+    fs::create_dir_all(&repo_root).unwrap();
+    write_fixture_gguf(&repo_root.join(artifact_name));
+
+    if let Some(resolved_revision) = resolved_revision {
+        fs::write(
+            repo_root.join(".metamorph-hf.json"),
+            serde_json::to_vec_pretty(&json!({ "resolved_revision": resolved_revision })).unwrap(),
+        )
+        .unwrap();
+    }
 }

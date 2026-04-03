@@ -33,6 +33,41 @@ pub enum MetamorphError {
         "source `{input}` is not cached locally yet; expected a managed artifact under `{cache_path}`. Recover by populating that cache entry or using a local source path."
     )]
     SourceNotCached { input: String, cache_path: PathBuf },
+    #[error(
+        "remote acquisition for `{input}` requires credentials in `{credential_env}`. Set that environment variable for private or gated repos, or use a public/local source."
+    )]
+    RemoteCredentialsRequired {
+        input: String,
+        credential_env: &'static str,
+    },
+    #[error(
+        "remote source `{input}` could not be resolved on Hugging Face. Verify the repo or revision, or use a local source path."
+    )]
+    RemoteRevisionNotFound { input: String },
+    #[error(
+        "remote fetch for `{input}` is not supported by the current acquisition slice: {reason}. Recover by using a representative GGUF repo, supplying `--from gguf` for ambiguous names, or using a local source path."
+    )]
+    RemoteFetchUnsupported { input: String, reason: String },
+    #[error(
+        "remote source `{input}` does not expose a supported fetch layout: {reason}. Recover by choosing a repo revision with one representative GGUF artifact or materializing a local source path."
+    )]
+    RemoteLayoutUnsupported { input: String, reason: String },
+    #[error(
+        "remote acquisition for `{input}` was interrupted while staging `{cache_path}`: {reason}. Retry the fetch, or rerun with `--refresh` if stale cache state remains."
+    )]
+    RemoteTransferInterrupted {
+        input: String,
+        cache_path: PathBuf,
+        reason: String,
+    },
+    #[error(
+        "managed remote cache state for `{input}` under `{cache_path}` is stale or invalid: {reason}. Recover by rerunning with `--refresh` or clearing the broken cache entry."
+    )]
+    RemoteCacheStateInvalid {
+        input: String,
+        cache_path: PathBuf,
+        reason: String,
+    },
     #[error("invalid publish destination `{0}`; expected `owner/name`")]
     InvalidPublishDestination(String),
     #[error(

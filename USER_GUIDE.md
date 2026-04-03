@@ -10,9 +10,10 @@ Today the most complete path is:
 
 1. inspect a source
 2. plan a conversion
-3. convert local GGUF into a reusable safetensors-based output
-4. validate that output
-5. preview how it would be cached or republished
+3. fetch or reuse a representative remote GGUF source when needed
+4. convert GGUF into a reusable safetensors-based output
+5. validate that output
+6. preview how it would be cached or republished
 
 The CLI is designed to make each step explicit instead of hiding transport, lossy conversion, or publish behavior behind convenience flags.
 
@@ -69,9 +70,10 @@ Current statuses mean:
 This distinction is important:
 
 - planning can work with local paths and `hf://...` references
-- execution is local-first today
-
-If you ask Metamorph to execute a remote source today, it only succeeds when the corresponding source artifact already exists in the managed cache. Otherwise you get an explicit cache-miss path instead of a hidden download attempt.
+- execution is still local-targeted today
+- representative remote GGUF sources now fetch on demand into managed cache instead of requiring manual cache seeding
+- `--refresh` keeps remote re-fetch explicit rather than implicit
+- broader remote repo layouts are still bounded and return recovery guidance instead of silent guesses
 
 ### 4. Run a conversion
 
@@ -118,8 +120,10 @@ Cache outcomes currently mean:
 
 - `reused-local-path`: Metamorph kept using the original local path
 - `materialized-local-copy`: Metamorph copied a local source into managed storage
-- `cache-hit`: the managed cache already contains what the next step needs
-- `cache-miss`: the cache key and expected path are known, but the data is not there yet
+- `reused-managed-local-copy`: Metamorph reused an existing managed copy of a local source
+- `reused-remote-cache`: the managed cache already contains the fetched remote artifact
+- `fetched-remote`: Metamorph fetched a representative remote artifact into managed storage
+- `refreshed-remote`: Metamorph replaced cached remote state because refresh was requested
 
 ### 7. Preview a publish
 
@@ -149,8 +153,14 @@ Common cases:
   - No conversion capability exists for that source/target pair yet.
 - lossy opt-in failure
   - Re-run with `--allow-lossy` only if that representation change is acceptable for your workflow.
-- remote `cache-miss`
-  - Use a local source path or pre-populate the managed cache path Metamorph reported.
+- remote credential failure
+  - Set `HF_TOKEN` for private or gated repos, or switch to a public/local source.
+- remote revision failure
+  - Verify the repo and revision, then retry.
+- remote layout failure
+  - The current fetch slice expects one representative GGUF artifact at the selected revision. Choose a repo revision that satisfies that shape or use a local source path.
+- stale remote cache state
+  - Re-run with `--refresh` to replace the broken managed cache entry.
 - validation failure
   - Treat the output as non-reusable until the missing file, wrong layout, or invalid safetensors artifact is fixed.
 - publish credential error
@@ -163,6 +173,7 @@ Common cases:
 Use Metamorph today when you need:
 
 - a real local GGUF conversion path
+- on-demand fetch for representative remote GGUF sources
 - explicit compatibility reporting before execution
 - deterministic cache identity
 - validation-backed reusable outputs
@@ -170,7 +181,7 @@ Use Metamorph today when you need:
 
 Do not treat it yet as:
 
-- an automatic Hugging Face downloader
+- a generic Hugging Face downloader for every repo layout
 - a generic model registry sync engine
 - a fully wired publish client
 

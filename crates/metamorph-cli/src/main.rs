@@ -4,8 +4,9 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use metamorph::{
-    CompatibilityReport, ConvertRequest, Format, PublishRequest, Source, Target, acquire_source,
-    cache_dir, compatibility, convert, inspect, plan, plan_publish, publish, validate,
+    CompatibilityReport, ConvertRequest, Format, PublishRequest, Source, SourceAcquisitionOptions,
+    Target, acquire_source_with_options, cache_dir, compatibility, convert, inspect, plan,
+    plan_publish, publish, validate,
 };
 
 #[derive(Debug, Parser)]
@@ -37,6 +38,8 @@ enum Command {
         allow_lossy: bool,
         #[arg(long)]
         plan_only: bool,
+        #[arg(long)]
+        refresh: bool,
     },
     Validate {
         path: PathBuf,
@@ -66,6 +69,8 @@ enum CacheCommand {
         from: Option<Format>,
         #[arg(long)]
         materialize: bool,
+        #[arg(long)]
+        refresh: bool,
     },
 }
 
@@ -81,7 +86,8 @@ fn main() -> Result<()> {
             to,
             allow_lossy,
             plan_only,
-        } => convert_command(&input, output, from, to, allow_lossy, plan_only),
+            refresh,
+        } => convert_command(&input, output, from, to, allow_lossy, plan_only, refresh),
         Command::Validate { path, format } => validate_command(&path, format),
         Command::Upload {
             input,
@@ -120,6 +126,7 @@ fn convert_command(
     to: Format,
     allow_lossy: bool,
     plan_only: bool,
+    refresh: bool,
 ) -> Result<()> {
     let source =
         Source::from_str(input).with_context(|| format!("failed to parse source `{input}`"))?;
@@ -129,6 +136,7 @@ fn convert_command(
         from,
         to,
         allow_lossy,
+        refresh_remote: refresh,
     };
     let compatibility_report = compatibility(&request)?;
     print_compatibility_report(&compatibility_report);
@@ -159,8 +167,19 @@ fn convert_command(
         return Ok(());
     }
 
-    convert(&request)?;
-    println!("Converted bundle: {}", request.target);
+    let conversion = convert(&request)?;
+    println!("Acquisition status: {}", conversion.acquisition.outcome);
+    println!(
+        "Acquisition path: {}",
+        conversion.acquisition.resolved_path.display()
+    );
+    if !conversion.acquisition.notes.is_empty() {
+        println!("Acquisition notes:");
+        for note in &conversion.acquisition.notes {
+            println!("- {note}");
+        }
+    }
+    println!("Converted bundle: {}", conversion.output.display());
 
     Ok(())
 }
@@ -253,10 +272,18 @@ fn cache_command(command: CacheCommand) -> Result<()> {
             input,
             from,
             materialize,
+            refresh,
         } => {
             let source = Source::from_str(&input)
                 .with_context(|| format!("failed to parse source `{input}`"))?;
-            let report = acquire_source(&source, from, materialize)?;
+            let report = acquire_source_with_options(
+                &source,
+                from,
+                SourceAcquisitionOptions {
+                    materialize_local_copy: materialize,
+                    refresh_remote: refresh,
+                },
+            )?;
             println!("Source: {}", report.source);
             match report.detected_format {
                 Some(format) => println!("Detected format: {format}"),

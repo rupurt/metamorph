@@ -24,8 +24,10 @@ Core types:
 - `ConvertRequest`
 - `CompatibilityReport`
 - `ConversionPlan`
+- `ConversionReport`
 - `ValidationReport`
 - `CacheIdentity`
+- `SourceAcquisitionOptions`
 - `SourceAcquisitionReport`
 - `PublishPlan`
 - `PublishReport`
@@ -111,6 +113,7 @@ Today it contains:
 - `convert()`
 - the concrete `gguf -> hf-safetensors` backend
 - the concrete `gguf -> safetensors` backend
+- conversion reports that carry acquisition truth back to the caller
 
 This file is the highest-value starting point when you are:
 
@@ -140,17 +143,31 @@ This module owns deterministic source cache behavior.
 It defines:
 
 - `CacheIdentity`
+- `SourceAcquisitionOptions`
 - `SourceAcquisitionOutcome`
 - `SourceAcquisitionReport`
 - `cache_dir()`
 - `cache_identity()`
 - `acquire_source()`
+- `acquire_source_with_options()`
 
 Important current distinction:
 
 - local materialization is implemented
-- remote acquisition is reported as cache hit or cache miss
-- remote fetching itself is not implemented yet
+- representative remote GGUF acquisition is implemented through a provider seam
+- remote reuse and refresh are explicit outcomes rather than hidden cache mutation
+
+### `remote.rs`
+
+This module owns the Hugging Face transport seam.
+
+It contains:
+
+- the provider abstraction used by acquisition
+- the default live provider backed by `hf-hub`
+- the mock provider selected through `METAMORPH_HF_MOCK_ROOT` for deterministic tests
+
+If you need to widen the remote slice beyond representative GGUF repos, start here and in `cache.rs`.
 
 ### `publish.rs`
 
@@ -192,15 +209,16 @@ Current behavior:
 1. `convert()` calls `plan()` first.
 2. The selected capability determines whether execution is allowed.
 3. The backend resolves the source through acquisition.
-4. The backend writes local output artifacts.
-5. `validate()` is called on the produced output.
+4. Representative remote GGUF sources are fetched or refreshed on demand when needed.
+5. The backend writes local output artifacts.
+6. `validate()` is called on the produced output.
 
 ### Cache source flow
 
 1. CLI parses the input into `Source`.
 2. `acquire_source()` computes deterministic cache identity.
 3. Local inputs are reused or materialized.
-4. Remote inputs report cache hit or cache miss.
+4. Representative remote inputs are fetched, reused, or refreshed through the provider seam.
 5. The CLI prints the cache key, path, status, and resolved path.
 
 ### Upload flow

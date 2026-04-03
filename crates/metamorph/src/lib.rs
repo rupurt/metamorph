@@ -3,6 +3,7 @@ mod error;
 pub mod format;
 pub mod plan;
 pub mod publish;
+mod remote;
 pub mod source;
 pub mod transform;
 pub mod validate;
@@ -11,8 +12,8 @@ pub mod validate;
 mod tests;
 
 pub use cache::{
-    CacheIdentity, SourceAcquisitionOutcome, SourceAcquisitionReport, acquire_source, cache_dir,
-    cache_identity,
+    CacheIdentity, SourceAcquisitionOptions, SourceAcquisitionOutcome, SourceAcquisitionReport,
+    acquire_source, acquire_source_with_options, cache_dir, cache_identity,
 };
 pub use error::{MetamorphError, Result};
 pub use format::Format;
@@ -21,5 +22,7 @@ pub use plan::{
 };
 pub use publish::{PublishPlan, PublishReport, PublishRequest, plan_publish, publish};
 pub use source::{InspectReport, Source, Target, inspect};
-pub use transform::{ConversionCapability, ExecutionSupport, convert, find_capability};
+pub use transform::{
+    ConversionCapability, ConversionReport, ExecutionSupport, convert, find_capability,
+};
 pub use validate::{ValidationReport, validate};

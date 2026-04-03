@@ -15,9 +15,9 @@ Metamorph currently ships a real, end-to-end local conversion path and the suppo
 | --- | --- | --- |
 | `inspect` | Local paths and `hf://repo[@revision]` sources | Hugging Face inspection is heuristic today; it infers format from the repo name rather than remote file listing |
 | `compatibility` / `plan` | Local paths and `hf://...` sources | Use `--from` or set `ConvertRequest { from: Some(...), .. }` when the source format cannot be inferred |
-| `convert` execution | `gguf -> hf-safetensors`, `gguf -> safetensors` | Execution is local-first; remote sources must already exist in the managed cache because remote fetch is not wired yet |
+| `convert` execution | `gguf -> hf-safetensors`, `gguf -> safetensors` | Local GGUF conversion is fully wired; representative remote `hf://...` GGUF sources fetch on demand into managed cache and support explicit `--refresh` |
 | `validate` | Local `safetensors` files and local `hf-safetensors` bundles | Passing outputs are marked reusable |
-| `cache` | Deterministic cache identity, local materialization, remote cache hit/miss reporting | Remote fetch is not implemented yet |
+| `cache` | Deterministic cache identity, local materialization, remote fetch/reuse/refresh reporting | The current remote slice supports representative GGUF repos that expose exactly one GGUF artifact per revision |
 | `upload` | Publish preview for local `hf-safetensors` bundles | `--execute` requires `HF_TOKEN` and still stops because remote publish execution is not wired yet |
 
 Executable conversion backends today:
@@ -34,9 +34,9 @@ Planned-only compatibility paths today:
 
 These gaps matter for both CLI usage and embedding:
 
-- It does not fetch remote Hugging Face sources on demand yet.
 - It does not perform real remote publish execution yet.
 - It does not treat every compatible path as executable.
+- It does not fetch every Hugging Face repository layout; the current remote slice is limited to representative GGUF repos with one GGUF artifact per revision.
 - It does not hide lossy conversion behind a silent fallback.
 
 If a path is planned-only, unknown, unsupported, or blocked by missing lossy opt-in, Metamorph is expected to say so explicitly.
@@ -127,7 +127,9 @@ Notes:
 Important distinction:
 
 - compatibility and planning work on local sources and `hf://...` sources
-- execution still needs a local GGUF artifact or a pre-populated cache entry for a remote source
+- execution can fetch a representative remote GGUF source on demand into the managed cache
+- use `--from gguf` when the remote repo name is too ambiguous to infer
+- use `--refresh` when you want to bypass reusable remote cache state explicitly
 
 ### 3. Execute a conversion
 
@@ -159,6 +161,9 @@ Current execution rules:
 
 - `--allow-lossy` is required for both executable GGUF conversion paths
 - conversion outputs must be local filesystem targets
+- representative remote `hf://...` GGUF sources are fetched on demand before backend execution
+- `--refresh` forces remote re-fetch instead of reusing an existing managed cache artifact
+- the current remote slice expects exactly one GGUF artifact at the selected repo revision
 - `hf://repo` is a publish destination, not a direct conversion target
 
 ### 4. Validate an output bundle
@@ -196,15 +201,19 @@ Materialize a managed copy of a local source:
 metamorph cache source ./models/bonsai.gguf --from gguf --materialize
 ```
 
+Force a remote refresh instead of reuse:
+
+```bash
+metamorph cache source hf://prism-ml/Bonsai-8B-gguf@main --refresh
+```
+
 `cache source` reports:
 
 - cache key
 - cache path
 - source format
-- status such as `reused-local-path`, `materialized-local-copy`, `cache-hit`, or `cache-miss`
+- status such as `reused-local-path`, `materialized-local-copy`, `reused-managed-local-copy`, `reused-remote-cache`, `fetched-remote`, or `refreshed-remote`
 - the resolved path Metamorph would use next
-
-For remote sources today, `cache-miss` means the cache path is known but the fetch step is still a future seam.
 
 ### 6. Preview a publish without mutating anything
 
@@ -237,11 +246,11 @@ Current behavior with `--execute`:
 Top-level commands:
 
 - `metamorph inspect <INPUT>`
-- `metamorph convert --input <INPUT> --output <OUTPUT> --to <FORMAT> [--from <FORMAT>] [--allow-lossy] [--plan-only]`
+- `metamorph convert --input <INPUT> --output <OUTPUT> --to <FORMAT> [--from <FORMAT>] [--allow-lossy] [--plan-only] [--refresh]`
 - `metamorph validate <PATH> [--format <FORMAT>]`
 - `metamorph upload --input <PATH> --repo <OWNER/NAME> [--execute]`
 - `metamorph cache dir`
-- `metamorph cache source <INPUT> [--from <FORMAT>] [--materialize]`
+- `metamorph cache source <INPUT> [--from <FORMAT>] [--materialize] [--refresh]`
 
 Accepted source forms:
 
@@ -301,6 +310,7 @@ fn convert_local_model() -> metamorph::Result<()> {
         from: Some(Format::Gguf),
         to: Format::HfSafetensors,
         allow_lossy: true,
+        refresh_remote: false,
     };
 
     let report = compatibility(&request)?;
@@ -332,14 +342,16 @@ Why check both `status` and `blockers`:
 `convert()` still resolves the input through source acquisition. That means:
 
 - local sources execute directly
-- remote sources only execute when the managed cache already contains the expected artifact
-- integrations should handle cache population separately until remote fetch lands
+- representative remote GGUF sources fetch on demand into deterministic managed cache paths
+- `ConvertRequest { refresh_remote: true, .. }` forces a re-fetch instead of remote cache reuse
+- broader remote repo layouts are still intentionally bounded and return explicit recovery guidance
 
 Relevant helpers:
 
 - `inspect()` for source detection
 - `cache_identity()` for deterministic cache location
-- `acquire_source()` for reuse, materialization, cache hit, or cache miss reporting
+- `acquire_source()` for default reuse or fetch behavior
+- `acquire_source_with_options()` when you need explicit refresh control
 
 ### Use validation as the reusable-output gate
 

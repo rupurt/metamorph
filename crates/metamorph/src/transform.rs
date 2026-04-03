@@ -11,11 +11,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokenizers::Tokenizer;
 
-use crate::cache::{SourceAcquisitionOutcome, acquire_source};
+use crate::cache::{
+    SourceAcquisitionOptions, SourceAcquisitionReport, acquire_source_with_options,
+};
 use crate::error::{MetamorphError, Result};
 use crate::format::Format;
 use crate::plan::{ConvertRequest, plan};
-use crate::source::{Source, Target, resolve_local_gguf_path_from_fs};
+use crate::source::{Target, resolve_local_gguf_path_from_fs};
 use crate::validate::validate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +47,12 @@ pub struct ConversionCapability {
     backend: Option<BackendKind>,
     backend_label: Option<&'static str>,
     pub steps: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversionReport {
+    pub acquisition: SourceAcquisitionReport,
+    pub output: PathBuf,
 }
 
 impl ConversionCapability {
@@ -129,7 +137,7 @@ pub fn find_capability(from: Format, to: Format) -> Option<ConversionCapability>
     }
 }
 
-pub fn convert(request: &ConvertRequest) -> Result<()> {
+pub fn convert(request: &ConvertRequest) -> Result<ConversionReport> {
     let conversion_plan = plan(request)?;
     let capability = find_capability(conversion_plan.source_format, conversion_plan.target_format)
         .ok_or_else(|| MetamorphError::UnsupportedConversionPath {
@@ -152,8 +160,9 @@ pub fn convert(request: &ConvertRequest) -> Result<()> {
     }
 }
 
-fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<()> {
-    let source_path = resolve_local_gguf_path(&request.source)?;
+fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<ConversionReport> {
+    let acquisition = acquire_gguf_source(request)?;
+    let source_path = resolve_local_gguf_path_from_fs(&acquisition.resolved_path)?;
     let output_dir = resolve_local_target_dir(&request.target)?;
 
     fs::create_dir_all(&output_dir)?;
@@ -174,11 +183,15 @@ fn convert_local_gguf_to_hf_safetensors(request: &ConvertRequest) -> Result<()> 
     candle_core::safetensors::save(&tensors, output_dir.join("model.safetensors"))?;
     validate(&output_dir, Some(Format::HfSafetensors))?;
 
-    Ok(())
+    Ok(ConversionReport {
+        acquisition,
+        output: output_dir,
+    })
 }
 
-fn convert_local_gguf_to_safetensors(request: &ConvertRequest) -> Result<()> {
-    let source_path = resolve_local_gguf_path(&request.source)?;
+fn convert_local_gguf_to_safetensors(request: &ConvertRequest) -> Result<ConversionReport> {
+    let acquisition = acquire_gguf_source(request)?;
+    let source_path = resolve_local_gguf_path_from_fs(&acquisition.resolved_path)?;
     let output_path = resolve_local_safetensors_target(&request.target)?;
 
     if let Some(parent) = output_path.parent() {
@@ -192,23 +205,21 @@ fn convert_local_gguf_to_safetensors(request: &ConvertRequest) -> Result<()> {
     candle_core::safetensors::save(&tensors, &output_path)?;
     validate(&output_path, Some(Format::Safetensors))?;
 
-    Ok(())
+    Ok(ConversionReport {
+        acquisition,
+        output: output_path,
+    })
 }
 
-fn resolve_local_gguf_path(source: &Source) -> Result<PathBuf> {
-    let acquisition = acquire_source(source, Some(Format::Gguf), false)?;
-
-    match acquisition.outcome {
-        SourceAcquisitionOutcome::ReusedLocalPath
-        | SourceAcquisitionOutcome::MaterializedLocalCopy
-        | SourceAcquisitionOutcome::CacheHit => {
-            resolve_local_gguf_path_from_fs(&acquisition.resolved_path)
-        }
-        SourceAcquisitionOutcome::CacheMiss => Err(MetamorphError::SourceNotCached {
-            input: source.display_name(),
-            cache_path: acquisition.cache_identity.path,
-        }),
-    }
+fn acquire_gguf_source(request: &ConvertRequest) -> Result<SourceAcquisitionReport> {
+    acquire_source_with_options(
+        &request.source,
+        Some(Format::Gguf),
+        SourceAcquisitionOptions {
+            materialize_local_copy: false,
+            refresh_remote: request.refresh_remote,
+        },
+    )
 }
 
 fn resolve_local_target_dir(target: &Target) -> Result<PathBuf> {

@@ -1,15 +1,17 @@
 ---
 # system-managed
 id: VFg8FN0q1
-status: backlog
+status: done
 created_at: 2026-04-02T16:17:47
-updated_at: 2026-04-02T16:18:57
+updated_at: 2026-04-02T17:01:37
 # authored
 title: Materialize Remote GGUF Artifacts Into Deterministic Cache Entries
 type: feat
 operator-signal:
 scope: VFg6yYH7e/VFg7mjSPU
 index: 2
+started_at: 2026-04-02T16:59:13
+completed_at: 2026-04-02T17:01:37
 ---
 
 # Materialize Remote GGUF Artifacts Into Deterministic Cache Entries
@@ -20,5 +22,5 @@ Turn the provider results into deterministic managed cache entries for represent
 
 ## Acceptance Criteria
 
-- [ ] [SRS-02/AC-01] A representative remote GGUF source materializes into the deterministic cache path derived from its source identity, with revision-aware metadata or manifest state persisted alongside the fetched artifact. <!-- verify: cargo test --workspace, SRS-02:start:end, proof: ac-1.log-->
-- [ ] [SRS-03/AC-01] Partial, interrupted, or malformed remote materialization is not treated as a reusable cache hit. <!-- verify: cargo test --workspace, SRS-03:start:end, proof: ac-2.log-->
+- [x] [SRS-02/AC-01] A representative remote GGUF source materializes into the deterministic cache path derived from its source identity, with revision-aware metadata or manifest state persisted alongside the fetched artifact. <!-- verify: cargo test --workspace, SRS-02:start:end, proof: ac-1.log-->
+- [x] [SRS-03/AC-01] Partial, interrupted, or malformed remote materialization is not treated as a reusable cache hit. <!-- verify: cargo test --workspace, SRS-03:start:end, proof: ac-2.log-->

@@ -14,6 +14,7 @@ pub struct ConvertRequest {
     pub from: Option<Format>,
     pub to: Format,
     pub allow_lossy: bool,
+    pub refresh_remote: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

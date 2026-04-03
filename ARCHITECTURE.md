@@ -18,9 +18,10 @@ Metamorph is a Rust workspace plus a Nix development shell.
 | `source.rs` | `Source`, `Target`, source parsing, local inspection, remote-source description | Local inspection is filesystem-based; Hugging Face inspection is heuristic and naming-based |
 | `format.rs` | `Format` parsing and display | Formats currently modeled are `gguf`, `safetensors`, `hf-safetensors`, and `mlx` |
 | `plan.rs` | `ConvertRequest`, `CompatibilityReport`, `ConversionPlan` | Compatibility and planning are registry-driven and explicit about blockers |
-| `transform.rs` | capability registry and backend dispatch | Only local GGUF execution backends are wired today |
+| `transform.rs` | capability registry and backend dispatch | GGUF execution backends are wired for local inputs and representative remote GGUF sources through acquisition |
 | `validate.rs` | reusable-output verification | Validation is implemented for `safetensors` and `hf-safetensors` contracts |
-| `cache.rs` | deterministic source cache identity and acquisition reporting | Local reuse and materialization work; remote fetch is still a future seam |
+| `cache.rs` | deterministic source cache identity, acquisition reporting, refresh control, and cache manifests | Local reuse/materialization and representative remote GGUF fetch/reuse/refresh are implemented |
+| `remote.rs` | Hugging Face provider seam and mock-backed proof surface | The default provider uses `hf-hub`; the mock provider drives deterministic tests and CLI e2e proof |
 | `publish.rs` | publish preflight and execution gating | Publish preview works; remote write execution is intentionally not implemented |
 | `crates/metamorph-cli/src/main.rs` | CLI argument parsing and human-readable rendering | The CLI calls the library directly and should not drift from library behavior |
 
@@ -34,10 +35,10 @@ It re-exports the workflow types and functions that integrators should build aro
 - `InspectReport`, `inspect()`
 - `ConvertRequest`, `CompatibilityReport`, `compatibility()`
 - `ConversionPlan`, `plan()`
-- `convert()`
+- `ConversionReport`, `convert()`
 - `ValidationReport`, `validate()`
 - `CacheIdentity`, `cache_identity()`
-- `SourceAcquisitionReport`, `acquire_source()`
+- `SourceAcquisitionOptions`, `SourceAcquisitionReport`, `acquire_source()`, `acquire_source_with_options()`
 - `PublishPlan`, `plan_publish()`
 - `PublishReport`, `publish()`
 
@@ -71,15 +72,17 @@ Important consequence:
 Metamorph separates source transport from model transformation.
 
 Planning can succeed for a remote source even when execution cannot yet fetch it. That is intentional.
+Planning can also stay purely descriptive even though acquisition now supports a bounded remote fetch slice.
 
 Current behavior by stage:
 
 - `inspect()` can describe local sources and infer a likely format for `hf://...` references
 - `compatibility()` and `plan()` can reason about those sources without downloading anything
-- `convert()` resolves the source through acquisition and only executes when a local file or cached artifact is available
+- `convert()` resolves the source through acquisition and can fetch a representative remote GGUF source on demand into managed cache
+- remote refresh remains explicit through `SourceAcquisitionOptions` and `ConvertRequest { refresh_remote: true, .. }`
 - `publish()` validates and plans a remote publish before any write would happen
 
-This boundary keeps the conversion core reusable while remote transport remains an explicit future seam.
+This boundary keeps the conversion core reusable while making network side effects explicit and auditable.
 
 ## CLI Boundary
 
@@ -90,6 +93,7 @@ Its responsibilities are:
 - parse flags with Clap
 - construct library request types
 - print compatibility, plan, validation, cache, and publish reports
+- print acquisition outcomes such as fetched, reused, or refreshed without re-implementing fetch policy
 - return errors from the library without re-implementing domain rules
 
 Its responsibilities are not:
@@ -102,7 +106,7 @@ Its responsibilities are not:
 
 These are the main seams where future work can expand behavior without distorting the current design:
 
-- remote fetchers for `hf://...` sources
+- broader remote fetch coverage for more `hf://...` layouts
 - additional conversion backends in the registry
 - broader validation contracts
 - real remote publish execution
