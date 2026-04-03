@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use metamorph::{
-    CompatibilityReport, ConvertRequest, Format, PublishRequest, Source, SourceAcquisitionOptions,
-    Target, acquire_source_with_options, cache_dir, compatibility, convert, inspect, plan,
-    plan_publish, publish, validate,
+    CompatibilityReport, ConvertRequest, Format, PublishRequest, PublishStatus, Source,
+    SourceAcquisitionOptions, Target, acquire_source_with_options, cache_dir, compatibility,
+    convert, inspect, plan, plan_publish, publish, validate,
 };
 
 #[derive(Debug, Parser)]
@@ -251,7 +251,22 @@ fn upload_command(input: &Path, repo: &str, execute: bool) -> Result<()> {
         target: Target::HuggingFaceRepo(repo.to_owned()),
         execute,
     })?;
+    println!("Publish status: {}", report.status);
     println!("Executed: {}", report.executed);
+    if !report.artifacts.is_empty() {
+        println!("Artifact status:");
+        for artifact in &report.artifacts {
+            println!(
+                "- {} -> {} [{}]",
+                artifact.local_path.display(),
+                artifact.remote_path,
+                artifact.status
+            );
+            if let Some(detail) = &artifact.detail {
+                println!("  {detail}");
+            }
+        }
+    }
     if !report.notes.is_empty() {
         println!("Notes:");
         for note in report.notes {
@@ -259,7 +274,16 @@ fn upload_command(input: &Path, repo: &str, execute: bool) -> Result<()> {
         }
     }
 
-    Ok(())
+    match report.status {
+        PublishStatus::Preview | PublishStatus::Complete => Ok(()),
+        PublishStatus::GuardedRefusal => {
+            bail!("guarded refusal; review the publish notes above before retrying")
+        }
+        PublishStatus::Partial => {
+            bail!("partial publish; review the artifact status and retry guidance above")
+        }
+        PublishStatus::Failed => bail!("publish failed; review the recovery notes above"),
+    }
 }
 
 fn cache_command(command: CacheCommand) -> Result<()> {

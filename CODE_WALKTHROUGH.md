@@ -54,7 +54,7 @@ Core functions:
 | `metamorph validate` | `validate()` | `crates/metamorph-cli/src/main.rs`, `crates/metamorph/src/validate.rs` |
 | `metamorph cache dir` | `cache_dir()` | `crates/metamorph-cli/src/main.rs`, `crates/metamorph/src/cache.rs` |
 | `metamorph cache source` | `acquire_source()` | `crates/metamorph-cli/src/main.rs`, `crates/metamorph/src/cache.rs`, `crates/metamorph/src/source.rs` |
-| `metamorph upload` | `plan_publish()`, `publish()` | `crates/metamorph-cli/src/main.rs`, `crates/metamorph/src/publish.rs`, `crates/metamorph/src/validate.rs` |
+| `metamorph upload` | `plan_publish()`, `publish()` | `crates/metamorph-cli/src/main.rs`, `crates/metamorph/src/publish.rs`, `crates/metamorph/src/remote_publish.rs`, `crates/metamorph/src/validate.rs` |
 
 ## Module Responsibilities
 
@@ -169,9 +169,21 @@ It contains:
 
 If you need to widen the remote slice beyond representative GGUF repos, start here and in `cache.rs`.
 
+### `remote_publish.rs`
+
+This module owns the Hugging Face publish transport seam.
+
+It contains:
+
+- the provider abstraction used by publish execution
+- the default live provider for preupload, LFS staging, and commit requests
+- the mock provider selected through `METAMORPH_HF_MOCK_ROOT` for deterministic upload proof
+
+If you need to widen publish behavior beyond existing model repos on `main`, start here and in `publish.rs`.
+
 ### `publish.rs`
 
-This module owns publish planning and execution gating.
+This module owns the public publish contract.
 
 It defines:
 
@@ -186,8 +198,8 @@ Current behavior:
 - validates a local `hf-safetensors` bundle
 - lists the artifacts that would be published
 - enforces destination validation
-- requires `HF_TOKEN` for the execute path
-- still returns a not-yet-implemented error for actual remote write execution
+- returns explicit `preview`, `guarded-refusal`, `complete`, `partial`, or `failed` status
+- keeps the library as the source of truth for per-artifact upload outcome reporting
 
 ## End-To-End Request Flows
 
@@ -226,7 +238,9 @@ Current behavior:
 1. CLI calls `plan_publish()`.
 2. The input bundle is validated as `hf-safetensors`.
 3. The publish artifact list is collected and rendered.
-4. `publish()` either returns a dry-run report or enforces explicit execute gating.
+4. `publish()` either returns a dry-run report or dispatches through the publish provider seam.
+5. The provider returns guarded-refusal, complete, partial, or failed outcome data plus per-artifact status.
+6. The CLI renders that report and chooses the process exit status without re-implementing publish policy.
 
 ## Where To Start For Common Changes
 

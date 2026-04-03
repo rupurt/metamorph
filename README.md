@@ -4,7 +4,7 @@
 
 It is aimed at two audiences:
 
-- CLI operators who need a repeatable inspect -> plan -> convert -> validate -> publish-preview workflow
+- CLI operators who need a repeatable inspect -> plan -> convert -> validate -> publish workflow
 - Rust integrators who want to embed that workflow instead of rebuilding it in one-off scripts
 
 ## What Metamorph Does Today
@@ -18,7 +18,7 @@ Metamorph currently ships a real, end-to-end local conversion path and the suppo
 | `convert` execution | `gguf -> hf-safetensors`, `gguf -> safetensors` | Local GGUF conversion is fully wired; representative remote `hf://...` GGUF sources fetch on demand into managed cache and support explicit `--refresh` |
 | `validate` | Local `safetensors` files and local `hf-safetensors` bundles | Passing outputs are marked reusable |
 | `cache` | Deterministic cache identity, local materialization, remote fetch/reuse/refresh reporting | The current remote slice supports representative GGUF repos that expose exactly one GGUF artifact per revision |
-| `upload` | Publish preview for local `hf-safetensors` bundles | `--execute` requires `HF_TOKEN` and still stops because remote publish execution is not wired yet |
+| `upload` | Preview and execute publish for local `hf-safetensors` bundles | `--execute` requires `HF_TOKEN`, targets an existing Hugging Face repo on `main`, and reports `complete`, `partial`, `guarded-refusal`, or `failed` outcomes explicitly |
 
 Executable conversion backends today:
 
@@ -34,9 +34,9 @@ Planned-only compatibility paths today:
 
 These gaps matter for both CLI usage and embedding:
 
-- It does not perform real remote publish execution yet.
 - It does not treat every compatible path as executable.
 - It does not fetch every Hugging Face repository layout; the current remote slice is limited to representative GGUF repos with one GGUF artifact per revision.
+- It does not create repos, choose alternate publish branches, or support non-Hugging-Face publish targets yet.
 - It does not hide lossy conversion behind a silent fallback.
 
 If a path is planned-only, unknown, unsupported, or blocked by missing lossy opt-in, Metamorph is expected to say so explicitly.
@@ -239,7 +239,11 @@ metamorph upload \
 Current behavior with `--execute`:
 
 - requires `HF_TOKEN`
-- still stops with a not-yet-implemented error instead of attempting a partial upload
+- targets an explicitly named existing Hugging Face repo on `main`
+- keeps preview mode and execute mode distinct
+- reports `complete`, `partial`, `guarded-refusal`, or `failed`
+- surfaces per-artifact status such as `pending`, `transferred`, `published`, `already-present`, or `failed`
+- prints retry guidance when a partial publish leaves remaining work
 
 ## CLI Command Reference
 
@@ -284,6 +288,9 @@ The main public workflow is built around these types:
 - `CacheIdentity`
 - `SourceAcquisitionReport`
 - `PublishPlan`
+- `PublishStatus`
+- `PublishArtifactStatus`
+- `PublishArtifactReport`
 - `PublishReport`
 
 ### Plan before executing
@@ -369,13 +376,40 @@ fn validate_bundle() -> metamorph::Result<()> {
 }
 ```
 
-### Use publish planning as a safe integration surface
+### Use publish status as the execution gate
 
-`plan_publish()` is useful even before remote upload execution exists:
+`plan_publish()` is still useful for preview and repo-name validation, but executable integrations should branch on `PublishStatus`.
 
-- it validates the input bundle
-- it lists the exact files that would be published
-- it keeps repo naming validation in one place
+```rust
+use std::path::PathBuf;
+
+use metamorph::{publish, PublishRequest, PublishStatus, Target};
+
+fn publish_bundle() -> metamorph::Result<()> {
+    let report = publish(&PublishRequest {
+        input: PathBuf::from("./artifacts/bonsai-candle"),
+        target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+        execute: true,
+    })?;
+
+    match report.status {
+        PublishStatus::Complete => assert!(report.executed),
+        PublishStatus::Preview => unreachable!("execute=true should not yield preview"),
+        PublishStatus::GuardedRefusal | PublishStatus::Partial | PublishStatus::Failed => {
+            eprintln!("publish needs attention: {report:#?}");
+        }
+    }
+
+    Ok(())
+}
+```
+
+Use the per-artifact reports to distinguish:
+
+- files already present upstream
+- artifacts transferred before a partial failure
+- artifacts still pending retry
+- artifacts that failed outright
 
 ## Behavioral Guarantees
 
@@ -386,6 +420,7 @@ The current repo contract is:
 - validation is part of the conversion workflow, not an optional afterthought
 - caching is deterministic and inspectable
 - upload is preview-first
+- upload execution is explicit and reports guarded refusal, complete, partial, and failed states from the library
 - the library surface stays ahead of the CLI surface
 
 ## Repository Map

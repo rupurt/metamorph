@@ -1,0 +1,9 @@
+id: VFgfuAvFN
+git_sha: ea10ccc40e1d9561a76444fc72008d5377ae86b8
+evidence:
+  EVIDENCE/ac-1.log: 052ca5c0cba0dd4622476f45c5b738a2136f9b84dc810a67bdbb7e97a0e6625d
+  EVIDENCE/ac-2.log: 2234becf61c619913e8cf3c5d689a831b7b74bd97ab46d78181051de631e907d
+  ? EVIDENCE/llm-judge-crates-metamorph-defines-a-publish-provider-or-executor-seam-that-can-target-an-existing-hugging-face-repository-and-upload-the-planned-artifact-set-for-a-validated-bundle-without-embedding-remote-write-policy-in-cli-code.txt
+  : b2bd3ae51961da73b56f2b25e05abe8722eeda17ac27d3bcbacf3b4f9848c8e2
+  ? EVIDENCE/llm-judge-the-new-publish-seam-is-library-owned-and-reusable-from-publish-execution-code-rather-than-being-hidden-behind-cli-specific-upload-handlers.txt
+  : 1b91015791afdcf5836db9f4ea98d449908d6bb0d24b45c1546cb22751e9bb18

@@ -4,6 +4,7 @@ pub mod format;
 pub mod plan;
 pub mod publish;
 mod remote;
+mod remote_publish;
 pub mod source;
 pub mod transform;
 pub mod validate;
@@ -20,7 +21,10 @@ pub use format::Format;
 pub use plan::{
     CompatibilityReport, CompatibilityStatus, ConversionPlan, ConvertRequest, compatibility, plan,
 };
-pub use publish::{PublishPlan, PublishReport, PublishRequest, plan_publish, publish};
+pub use publish::{
+    PublishArtifactReport, PublishArtifactStatus, PublishPlan, PublishReport, PublishRequest,
+    PublishStatus, plan_publish, publish,
+};
 pub use source::{InspectReport, Source, Target, inspect};
 pub use transform::{
     ConversionCapability, ConversionReport, ExecutionSupport, convert, find_capability,

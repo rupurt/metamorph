@@ -1,15 +1,17 @@
 ---
 # system-managed
 id: VFgfuDwK5
-status: backlog
+status: done
 created_at: 2026-04-02T18:31:29
-updated_at: 2026-04-02T18:32:22
+updated_at: 2026-04-03T15:17:44
 # authored
 title: Surface Recovery Guidance For Remote Publish Failures
 type: feat
 operator-signal:
 scope: VFg6zB3Ej/VFgfOlTWF
 index: 1
+started_at: 2026-04-03T15:10:57
+completed_at: 2026-04-03T15:17:44
 ---
 
 # Surface Recovery Guidance For Remote Publish Failures
@@ -20,5 +22,5 @@ Replace generic remote publish failures with recovery guidance that distinguishe
 
 ## Acceptance Criteria
 
-- [ ] [SRS-01/AC-01] Remote publish failures and guarded refusals distinguish missing credentials, missing destination, permission failure, interrupted transfer, and partial publish state in the operator-facing recovery path. <!-- verify: cargo test --workspace, SRS-01:start:end, proof: ac-1.log-->
-- [ ] [SRS-NFR-01/AC-01] Library and CLI output use consistent terminology for guarded refusal, publish failure, and partial publish recovery classes. <!-- verify: cargo test --workspace, SRS-NFR-01:start, proof: ac-2.log-->
+- [x] [SRS-01/AC-01] Remote publish failures and guarded refusals distinguish missing credentials, missing destination, permission failure, interrupted transfer, and partial publish state in the operator-facing recovery path. <!-- verify: cargo test --workspace, SRS-01:start:end, proof: ac-1.log-->
+- [x] [SRS-NFR-01/AC-01] Library and CLI output use consistent terminology for guarded refusal, publish failure, and partial publish recovery classes. <!-- verify: cargo test --workspace, SRS-NFR-01:start, proof: ac-2.log-->

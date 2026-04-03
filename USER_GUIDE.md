@@ -13,7 +13,7 @@ Today the most complete path is:
 3. fetch or reuse a representative remote GGUF source when needed
 4. convert GGUF into a reusable safetensors-based output
 5. validate that output
-6. preview how it would be cached or republished
+6. preview or execute an explicit publish to an existing destination
 
 The CLI is designed to make each step explicit instead of hiding transport, lossy conversion, or publish behavior behind convenience flags.
 
@@ -21,7 +21,7 @@ The CLI is designed to make each step explicit instead of hiding transport, loss
 
 - Runtime integrators who need a dependable local conversion path
 - Application developers who want a command-line workflow before embedding the library
-- Infrastructure teams that need to inspect cache state and preview republishing
+- Infrastructure teams that need to inspect cache state and execute or preview controlled republishing
 
 ## Operator Loop
 
@@ -125,7 +125,7 @@ Cache outcomes currently mean:
 - `fetched-remote`: Metamorph fetched a representative remote artifact into managed storage
 - `refreshed-remote`: Metamorph replaced cached remote state because refresh was requested
 
-### 7. Preview a publish
+### 7. Preview or execute a publish
 
 `upload` is intentionally safe by default:
 
@@ -137,7 +137,14 @@ metamorph upload \
 
 This validates the bundle and prints the publish plan without mutating anything.
 
-`--execute` is reserved for the future remote-write path. Today it requires `HF_TOKEN` and then stops with a not-yet-implemented error rather than performing a hidden partial upload.
+`--execute` is explicit:
+
+- it requires `HF_TOKEN`
+- it targets an existing Hugging Face repo on `main`
+- it reports `complete`, `partial`, `guarded-refusal`, or `failed`
+- it prints per-artifact status so retry work is legible
+
+If the repo already matches the validated local bundle, Metamorph reports `already-present` for those artifacts instead of pretending it republished them.
 
 ## Recovery Guide
 
@@ -164,9 +171,13 @@ Common cases:
 - validation failure
   - Treat the output as non-reusable until the missing file, wrong layout, or invalid safetensors artifact is fixed.
 - publish credential error
-  - Set `HF_TOKEN` if you are testing the execute path.
-- publish not implemented
-  - Stay on the preview flow; remote writes are still a future seam.
+  - Set `HF_TOKEN`, confirm it has write access, and rerun with `--execute`.
+- publish guarded refusal
+  - The execute path was intentionally stopped before or during remote preflight. Review the notes, fix credentials or destination permissions, and retry explicitly.
+- partial publish
+  - Some remote work finished and some did not. Review the per-artifact status, keep the validated local bundle unchanged, and rerun `upload --execute`.
+- publish failure
+  - No complete publish was recorded. Confirm the destination repo exists, review the recovery note, and retry explicitly.
 
 ## Practical Expectations
 
@@ -177,12 +188,12 @@ Use Metamorph today when you need:
 - explicit compatibility reporting before execution
 - deterministic cache identity
 - validation-backed reusable outputs
-- a publish preview surface that does not mutate remote state
+- an explicit publish surface for validated bundles into existing Hugging Face repos
 
 Do not treat it yet as:
 
 - a generic Hugging Face downloader for every repo layout
 - a generic model registry sync engine
-- a fully wired publish client
+- a repo-creation or branch-management client
 
 For library-facing details, use [README.md](README.md). For the implementation boundaries behind these workflows, use [ARCHITECTURE.md](ARCHITECTURE.md).

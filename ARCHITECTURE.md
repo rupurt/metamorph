@@ -6,7 +6,7 @@ This document describes the implemented technical shape of Metamorph, with empha
 
 Metamorph is a Rust workspace plus a Nix development shell.
 
-- `crates/metamorph/` is the source of truth for inspection, planning, conversion, validation, cache identity, acquisition, and publish planning
+- `crates/metamorph/` is the source of truth for inspection, planning, conversion, validation, cache identity, acquisition, and publish execution
 - `crates/metamorph-cli/` is a thin renderer and argument-parsing layer over the library
 - `flake.nix`, `flake.lock`, and `nix/` define the build and toolchain environment
 - `.keel/` plus the root governance docs define planning and operational workflow
@@ -21,8 +21,9 @@ Metamorph is a Rust workspace plus a Nix development shell.
 | `transform.rs` | capability registry and backend dispatch | GGUF execution backends are wired for local inputs and representative remote GGUF sources through acquisition |
 | `validate.rs` | reusable-output verification | Validation is implemented for `safetensors` and `hf-safetensors` contracts |
 | `cache.rs` | deterministic source cache identity, acquisition reporting, refresh control, and cache manifests | Local reuse/materialization and representative remote GGUF fetch/reuse/refresh are implemented |
-| `remote.rs` | Hugging Face provider seam and mock-backed proof surface | The default provider uses `hf-hub`; the mock provider drives deterministic tests and CLI e2e proof |
-| `publish.rs` | publish preflight and execution gating | Publish preview works; remote write execution is intentionally not implemented |
+| `remote.rs` | Hugging Face acquisition seam and mock-backed fetch proof surface | The default provider uses `hf-hub`; the mock provider drives deterministic fetch tests |
+| `remote_publish.rs` | Hugging Face publish seam and mock-backed upload proof surface | The default provider negotiates preupload/LFS/commit execution; the mock provider drives deterministic upload proof |
+| `publish.rs` | publish preflight, report modeling, and execution dispatch | Publish preview and existing-repo execute flows are library-owned and explicit about guarded refusal, partial, and failed outcomes |
 | `crates/metamorph-cli/src/main.rs` | CLI argument parsing and human-readable rendering | The CLI calls the library directly and should not drift from library behavior |
 
 ## Stable Integration Contract
@@ -80,7 +81,7 @@ Current behavior by stage:
 - `compatibility()` and `plan()` can reason about those sources without downloading anything
 - `convert()` resolves the source through acquisition and can fetch a representative remote GGUF source on demand into managed cache
 - remote refresh remains explicit through `SourceAcquisitionOptions` and `ConvertRequest { refresh_remote: true, .. }`
-- `publish()` validates and plans a remote publish before any write would happen
+- `publish()` validates the bundle first, then either returns preview state or executes an explicit existing-repo upload flow
 
 This boundary keeps the conversion core reusable while making network side effects explicit and auditable.
 
@@ -109,7 +110,7 @@ These are the main seams where future work can expand behavior without distortin
 - broader remote fetch coverage for more `hf://...` layouts
 - additional conversion backends in the registry
 - broader validation contracts
-- real remote publish execution
+- broader publish targets, branch control, and repo bootstrap
 
 When adding one of these, keep the shape intact:
 

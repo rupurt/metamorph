@@ -22,10 +22,10 @@ mission: VFg6gc9yJ
 ## Voyages
 
 <!-- BEGIN GENERATED -->
-**Progress:** 0/3 voyages complete, 0/10 stories done
+**Progress:** 3/3 voyages complete, 10/10 stories done
 | Voyage | Status | Stories |
 |--------|--------|---------|
-| [Build A Guarded Hugging Face Publish Executor](voyages/VFgfOkNWv/) | planned | 0/3 |
-| [Wire Real Upload Execution Into Library And CLI](voyages/VFgfOkuYG/) | planned | 0/3 |
-| [Harden Publish Recovery Proof And Documentation](voyages/VFgfOlTWF/) | planned | 0/4 |
+| [Build A Guarded Hugging Face Publish Executor](voyages/VFgfOkNWv/) | done | 3/3 |
+| [Wire Real Upload Execution Into Library And CLI](voyages/VFgfOkuYG/) | done | 3/3 |
+| [Harden Publish Recovery Proof And Documentation](voyages/VFgfOlTWF/) | done | 4/4 |
 <!-- END GENERATED -->

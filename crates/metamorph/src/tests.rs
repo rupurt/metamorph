@@ -15,10 +15,10 @@ use tempfile::tempdir;
 use crate::error::HF_TOKEN_ENV;
 use crate::remote::MOCK_ROOT_ENV;
 use crate::{
-    CompatibilityStatus, ConvertRequest, ExecutionSupport, Format, PublishRequest, Source,
-    SourceAcquisitionOptions, SourceAcquisitionOutcome, Target, acquire_source,
-    acquire_source_with_options, cache_identity, compatibility, convert, inspect, plan,
-    plan_publish, publish, validate,
+    CompatibilityStatus, ConvertRequest, ExecutionSupport, Format, PublishArtifactStatus,
+    PublishRequest, PublishStatus, Source, SourceAcquisitionOptions, SourceAcquisitionOutcome,
+    Target, acquire_source, acquire_source_with_options, cache_identity, compatibility, convert,
+    inspect, plan, plan_publish, publish, validate,
 };
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -717,23 +717,223 @@ fn publish_plan_validates_bundle_and_lists_artifacts() {
 }
 
 #[test]
+fn publish_preview_reports_pending_artifacts() {
+    let temp = tempdir().unwrap();
+    write_valid_hf_bundle(temp.path());
+
+    let report = publish(&PublishRequest {
+        input: temp.path().to_path_buf(),
+        target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+        execute: false,
+    })
+    .unwrap();
+
+    assert_eq!(report.status, PublishStatus::Preview);
+    assert!(!report.executed);
+    assert!(
+        report
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.status == PublishArtifactStatus::Pending)
+    );
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("preview: dry run only"))
+    );
+}
+
+#[test]
 fn publish_requires_credentials_for_execute_mode() {
     let _env_guard = ENV_LOCK.lock().unwrap();
     let temp = tempdir().unwrap();
     write_valid_hf_bundle(temp.path());
     unsafe { std::env::remove_var("HF_TOKEN") };
 
-    let error = publish(&PublishRequest {
+    let report = publish(&PublishRequest {
         input: temp.path().to_path_buf(),
         target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
         execute: true,
     })
-    .unwrap_err();
+    .unwrap();
 
+    assert_eq!(report.status, PublishStatus::GuardedRefusal);
+    assert!(!report.executed);
     assert!(
-        error
-            .to_string()
-            .contains("requires credentials in `HF_TOKEN`")
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("requires `HF_TOKEN`"))
+    );
+}
+
+#[test]
+fn publish_executes_validated_bundle_through_mock_provider() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    let temp = tempdir().unwrap();
+    let mock_root = temp.path().join("mock");
+    let repo_root = mock_root.join("your-org").join("Bonsai-8B-candle");
+    write_valid_hf_bundle(temp.path());
+    fs::create_dir_all(&repo_root).unwrap();
+
+    unsafe {
+        std::env::set_var(MOCK_ROOT_ENV, &mock_root);
+        std::env::set_var(HF_TOKEN_ENV, "hf_test_token");
+    }
+
+    let report = publish(&PublishRequest {
+        input: temp.path().to_path_buf(),
+        target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+        execute: true,
+    })
+    .unwrap();
+
+    unsafe {
+        std::env::remove_var(MOCK_ROOT_ENV);
+        std::env::remove_var(HF_TOKEN_ENV);
+    }
+
+    assert_eq!(report.status, PublishStatus::Complete);
+    assert!(report.executed);
+    assert!(report.artifacts.iter().all(|artifact| matches!(
+        artifact.status,
+        PublishArtifactStatus::Published | PublishArtifactStatus::AlreadyPresent
+    )));
+    assert!(repo_root.join("_published").join("config.json").is_file());
+    assert!(
+        repo_root
+            .join("_published")
+            .join("model.safetensors")
+            .is_file()
+    );
+}
+
+#[test]
+fn publish_reports_partial_mock_publish_and_retry_guidance() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    let temp = tempdir().unwrap();
+    let mock_root = temp.path().join("mock");
+    let repo_root = mock_root.join("your-org").join("Bonsai-8B-candle");
+    write_valid_hf_bundle(temp.path());
+    fs::create_dir_all(&repo_root).unwrap();
+    write_mock_publish_config(
+        &repo_root,
+        json!({
+            "interrupt_after_uploads": 2
+        }),
+    );
+
+    unsafe {
+        std::env::set_var(MOCK_ROOT_ENV, &mock_root);
+        std::env::set_var(HF_TOKEN_ENV, "hf_test_token");
+    }
+
+    let report = publish(&PublishRequest {
+        input: temp.path().to_path_buf(),
+        target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+        execute: true,
+    })
+    .unwrap();
+
+    unsafe {
+        std::env::remove_var(MOCK_ROOT_ENV);
+        std::env::remove_var(HF_TOKEN_ENV);
+    }
+
+    assert_eq!(report.status, PublishStatus::Partial);
+    assert!(report.executed);
+    assert!(
+        report
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.status == PublishArtifactStatus::Published)
+    );
+    assert!(
+        report
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.status == PublishArtifactStatus::Pending)
+    );
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("rerunning `upload --execute`"))
+    );
+}
+
+#[test]
+fn publish_reports_missing_mock_destination() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    let temp = tempdir().unwrap();
+    let mock_root = temp.path().join("mock");
+    write_valid_hf_bundle(temp.path());
+
+    unsafe {
+        std::env::set_var(MOCK_ROOT_ENV, &mock_root);
+        std::env::set_var(HF_TOKEN_ENV, "hf_test_token");
+    }
+
+    let report = publish(&PublishRequest {
+        input: temp.path().to_path_buf(),
+        target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+        execute: true,
+    })
+    .unwrap();
+
+    unsafe {
+        std::env::remove_var(MOCK_ROOT_ENV);
+        std::env::remove_var(HF_TOKEN_ENV);
+    }
+
+    assert_eq!(report.status, PublishStatus::Failed);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("does not exist in the mock provider"))
+    );
+}
+
+#[test]
+fn publish_reports_guarded_refusal_for_mock_permission_failure() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    let temp = tempdir().unwrap();
+    let mock_root = temp.path().join("mock");
+    let repo_root = mock_root.join("your-org").join("Bonsai-8B-candle");
+    write_valid_hf_bundle(temp.path());
+    fs::create_dir_all(&repo_root).unwrap();
+    write_mock_publish_config(
+        &repo_root,
+        json!({
+            "deny_write": true
+        }),
+    );
+
+    unsafe {
+        std::env::set_var(MOCK_ROOT_ENV, &mock_root);
+        std::env::set_var(HF_TOKEN_ENV, "hf_test_token");
+    }
+
+    let report = publish(&PublishRequest {
+        input: temp.path().to_path_buf(),
+        target: Target::HuggingFaceRepo("your-org/Bonsai-8B-candle".into()),
+        execute: true,
+    })
+    .unwrap();
+
+    unsafe {
+        std::env::remove_var(MOCK_ROOT_ENV);
+        std::env::remove_var(HF_TOKEN_ENV);
+    }
+
+    assert_eq!(report.status, PublishStatus::GuardedRefusal);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("denied write access"))
     );
 }
 
@@ -812,6 +1012,14 @@ fn write_valid_hf_bundle(path: &std::path::Path) {
     fs::write(path.join("tokenizer.json"), b"{}").unwrap();
     fs::write(path.join("generation_config.json"), b"{}").unwrap();
     write_valid_safetensors(path.join("model.safetensors").as_path());
+}
+
+fn write_mock_publish_config(path: &std::path::Path, value: JsonValue) {
+    fs::write(
+        path.join(".metamorph-hf-publish.json"),
+        serde_json::to_vec_pretty(&value).unwrap(),
+    )
+    .unwrap();
 }
 
 fn write_valid_safetensors(path: &std::path::Path) {
