@@ -34,7 +34,13 @@
 | [Wire Remote Fetch Into Cache And Conversion Flows](epics/VFg6yYH7e/voyages/VFg7nTfTq/) | done |
 | [Harden Refresh Recovery And Documentation](epics/VFg6yYH7e/voyages/VFg7oHwbx/) | done |
 
-### [Guarded Hugging Face Publish Execution](epics/VFg6zB3Ej/) (draft)
+### [Guarded Hugging Face Publish Execution](epics/VFg6zB3Ej/) (active)
+
+| Voyage | Status |
+|--------|--------|
+| [Build A Guarded Hugging Face Publish Executor](epics/VFg6zB3Ej/voyages/VFgfOkNWv/) | planned |
+| [Wire Real Upload Execution Into Library And CLI](epics/VFg6zB3Ej/voyages/VFgfOkuYG/) | planned |
+| [Harden Publish Recovery Proof And Documentation](epics/VFg6zB3Ej/voyages/VFgfOlTWF/) | planned |
 
 ### [Promote Compatible Paths Into Executable Flows](epics/VFg70aqT7/) (draft)
 
